@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8"?>
+    <odoo>
+
+        <record id="view_form_diwapodoo" model="ir.ui.view">
+            <field name="name">Diwapodoo</field>
+                <field name="model">diwapodoo.diwapodoo</field>
+                <field name="type">form</field>
+                <field name="arch" type="xml">
+                <form>
+                    <sheet>
+                        <group>
+                            <group>
+                                <field name="name"/>
+                            </group>    
+                            <group>
+                            </group>    
+                        </group>
+                    </sheet>
+                </form>
+            </field>
+        </record>
+
+        <record id="tree_view_diwapodoo" model="ir.ui.view">
+            <field name="name">Diwapodoo</field>
+            <field name="model">diwapodoo.diwapodoo</field>
+            <field name="arch" type="xml">
+                <tree>
+                    <field name="name"/>
+                </tree>
+            </field>
+        </record>
+
+        <record id="diwapodoo_action" model="ir.actions.act_window">
+            <field name="name">Diwapodoo</field>
+            <field name="res_model">diwapodoo.diwapodoo</field>
+            <field name="view_mode">tree,form</field>
+            <field name="search_view_id" ref="view_form_diwapodoo"/>
+        </record>
+
+        <menuitem name="Diwapodoo"
+            id="diwapodoo_menu_root"/>
+
+        <menuitem name="Diwapodoo"
+            id="diwapodoo_menu_action"
+            action="diwapodoo_action"
+            parent="diwapodoo_menu_root"/>
+    </odoo>
