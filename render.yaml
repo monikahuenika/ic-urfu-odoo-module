@@ -1,0 +1,41 @@
+databases:
+  # PostgreSQL Database (Managed)
+  - name: odoo-db
+    databaseName: odoo
+    user: odoo
+    plan: free
+
+services:
+  # Odoo Application
+  - type: web
+    name: odoo-urfu-demo
+    env: docker
+    plan: free
+    region: frankfurt
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /web/database/manager
+    envVars:
+      - key: DB_HOST
+        fromDatabase:
+          name: odoo-db
+          property: host
+      - key: DB_PORT
+        fromDatabase:
+          name: odoo-db
+          property: port
+      - key: DB_USER
+        fromDatabase:
+          name: odoo-db
+          property: user
+      - key: DB_PASSWORD
+        fromDatabase:
+          name: odoo-db
+          property: password
+      - key: DB_NAME
+        fromDatabase:
+          name: odoo-db
+          property: database
+      - key: ADMIN_PASSWORD
+        generateValue: true
+      - key: ODOO_RC
+        value: /etc/odoo/odoo.conf
