@@ -11,7 +11,7 @@ services:
     name: odoo-urfu-demo
     env: docker
     plan: free
-    region: frankfurt
+    region: oregon
     dockerfilePath: ./Dockerfile
     healthCheckPath: /web/database/manager
     envVars:
