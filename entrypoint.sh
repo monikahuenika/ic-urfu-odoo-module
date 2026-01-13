@@ -1,6 +1,11 @@
 #!/bin/bash
 set -e
 
+# Используем порт из переменной окружения (Render передаёт PORT)
+export ODOO_PORT="${PORT:-8069}"
+
+echo "Starting Odoo on port $ODOO_PORT"
+
 # Парсим DATABASE_URL если он задан
 if [ -n "$DATABASE_URL" ]; then
     echo "Parsing DATABASE_URL..."
@@ -60,7 +65,7 @@ list_db = True
 dbfilter = .*
 
 # Server settings
-xmlrpc_port = 8069
+xmlrpc_port = ${ODOO_PORT}
 workers = 2
 max_cron_threads = 1
 
@@ -80,5 +85,20 @@ EOF
 
 echo "Odoo configuration created successfully"
 
-# Запускаем Odoo
-exec odoo -c /etc/odoo/odoo.conf "$@"
+# Проверяем, инициализирована ли база данных
+echo "Checking if database is initialized..."
+
+# Пытаемся подключиться и проверить наличие таблицы ir_module_module
+DB_INITIALIZED=$(PGPASSWORD="$DB_PASSWORD" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -t -c "SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = 'ir_module_module');" 2>/dev/null || echo "f")
+
+if [[ "$DB_INITIALIZED" =~ "t" ]]; then
+    echo "✓ Database already initialized"
+    INIT_FLAGS=""
+else
+    echo "✗ Database not initialized, will initialize with -i base"
+    INIT_FLAGS="-i base --without-demo=all"
+fi
+
+# Запускаем Odoo (с инициализацией если нужно)
+echo "Starting Odoo..."
+exec odoo -c /etc/odoo/odoo.conf $INIT_FLAGS "$@"
