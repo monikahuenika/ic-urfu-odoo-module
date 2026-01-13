@@ -22,4 +22,9 @@
         "views/ic_urfu_views.xml",
         "views/ic_urfu_config_views.xml",
     ],
+    "demo": [
+        "demo/demo_users.xml",
+        "demo/demo_subjects.xml",
+        "demo/demo_plans.xml",
+    ],
 }

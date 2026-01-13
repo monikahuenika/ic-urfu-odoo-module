@@ -95,8 +95,8 @@ if [[ "$DB_INITIALIZED" =~ "t" ]]; then
     echo "✓ Database already initialized"
     INIT_FLAGS=""
 else
-    echo "✗ Database not initialized, will initialize with -i base"
-    INIT_FLAGS="-i base --without-demo=all"
+    echo "✗ Database not initialized, will initialize with -i base,ic_urfu_module"
+    INIT_FLAGS="-i base,ic_urfu_module --load-language=ru_RU"
 fi
 
 # Запускаем Odoo (с инициализацией если нужно)
