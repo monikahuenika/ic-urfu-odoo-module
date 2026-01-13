@@ -1,6 +1,35 @@
 #!/bin/bash
 set -e
 
+# Парсим DATABASE_URL если он задан
+if [ -n "$DATABASE_URL" ]; then
+    echo "Parsing DATABASE_URL..."
+
+    # Извлекаем компоненты из postgres://user:password@host:port/database
+    # Используем regex для парсинга
+    if [[ $DATABASE_URL =~ postgres://([^:]+):([^@]+)@([^:]+):([^/]+)/(.+)(\?.*)?$ ]]; then
+        export DB_USER="${BASH_REMATCH[1]}"
+        export DB_PASSWORD="${BASH_REMATCH[2]}"
+        export DB_HOST="${BASH_REMATCH[3]}"
+        export DB_PORT="${BASH_REMATCH[4]}"
+        export DB_NAME="${BASH_REMATCH[5]}"
+        echo "Database connection parsed successfully"
+        echo "Host: $DB_HOST"
+        echo "Port: $DB_PORT"
+        echo "Database: $DB_NAME"
+    else
+        echo "ERROR: Failed to parse DATABASE_URL"
+        exit 1
+    fi
+fi
+
+# Проверяем наличие обязательных переменных
+if [ -z "$DB_HOST" ] || [ -z "$DB_USER" ] || [ -z "$DB_PASSWORD" ]; then
+    echo "ERROR: Database connection parameters not set"
+    echo "Please set DATABASE_URL or DB_HOST, DB_USER, DB_PASSWORD"
+    exit 1
+fi
+
 # Создаем конфигурационный файл с подстановкой переменных окружения
 cat > /etc/odoo/odoo.conf << EOF
 [options]
@@ -37,6 +66,8 @@ limit_time_real = 1200
 limit_memory_hard = 2684354560
 limit_memory_soft = 2147483648
 EOF
+
+echo "Odoo configuration created successfully"
 
 # Запускаем Odoo
 exec odoo -c /etc/odoo/odoo.conf "$@"
