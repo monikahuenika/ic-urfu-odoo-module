@@ -1,23 +1,25 @@
-
 # Copyright <2026> Michael <->
 # License MIT
 {
-    "name": "Module name",
-    "summary": "-",
-    "version": "13.0.1.0.0",
+    "name": "IC UrFU Module",
+    "summary": "Individual education plan generator for UrFU",
+    "version": "17.0.1.0.0",
     "development_status": "Beta",
-    "category": "Uncategorized",
+    "category": "Education",
     "website": "-",
     "author": "<->",
     "maintainers": ["TheMLord"],
-    "license": "MIT",
-    "application": False ,
+    "license": "LGPL-3",
+    "application": True,
     "installable": True,
-    "depends": ['Your module deps in comma separated: account', 'web'],
+    "depends": ["base", "web", "mail"],
+    "external_dependencies": {
+        "python": ["docx"],
+    },
     "data": [
-        "security/security_ic_urfu.xml",
+        "security/ic_urfu_security.xml",
         "security/ir.model.access.csv",
-        "views/view_report.xml",
-        "views/view_ic_urfu.xml",
+        "views/ic_urfu_views.xml",
+        "views/ic_urfu_config_views.xml",
     ],
 }
