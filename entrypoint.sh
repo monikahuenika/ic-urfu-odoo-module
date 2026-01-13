@@ -5,20 +5,31 @@ set -e
 if [ -n "$DATABASE_URL" ]; then
     echo "Parsing DATABASE_URL..."
 
-    # Извлекаем компоненты из postgres://user:password@host:port/database
-    # Используем regex для парсинга
-    if [[ $DATABASE_URL =~ postgres://([^:]+):([^@]+)@([^:]+):([^/]+)/(.+)(\?.*)?$ ]]; then
-        export DB_USER="${BASH_REMATCH[1]}"
-        export DB_PASSWORD="${BASH_REMATCH[2]}"
-        export DB_HOST="${BASH_REMATCH[3]}"
-        export DB_PORT="${BASH_REMATCH[4]}"
-        export DB_NAME="${BASH_REMATCH[5]}"
-        echo "Database connection parsed successfully"
-        echo "Host: $DB_HOST"
-        echo "Port: $DB_PORT"
-        echo "Database: $DB_NAME"
+    # Показываем маскированный URL для отладки
+    MASKED_URL=$(echo "$DATABASE_URL" | sed -E 's/(postgres[ql]*:\/\/[^:]+:)[^@]+(@.*)/\1****\2/')
+    echo "DATABASE_URL format: $MASKED_URL"
+
+    # Извлекаем компоненты из postgres[ql]://user:password@host:port/database
+    # Поддерживаем как postgres:// так и postgresql://
+    if [[ $DATABASE_URL =~ postgres(ql)?://([^:]+):([^@]+)@([^:/]+):?([0-9]*)/([^?]+)(\?.*)?$ ]]; then
+        export DB_USER="${BASH_REMATCH[2]}"
+        export DB_PASSWORD="${BASH_REMATCH[3]}"
+        export DB_HOST="${BASH_REMATCH[4]}"
+        export DB_PORT="${BASH_REMATCH[5]:-5432}"
+        export DB_NAME="${BASH_REMATCH[6]}"
+
+        # URL-decode пароля (если содержит %XX последовательности)
+        DB_PASSWORD=$(printf '%b' "${DB_PASSWORD//%/\\x}")
+
+        echo "✓ Database connection parsed successfully"
+        echo "  Host: $DB_HOST"
+        echo "  Port: $DB_PORT"
+        echo "  Database: $DB_NAME"
+        echo "  User: $DB_USER"
     else
-        echo "ERROR: Failed to parse DATABASE_URL"
+        echo "✗ ERROR: Failed to parse DATABASE_URL"
+        echo "Expected format: postgres://user:password@host:port/database"
+        echo "Or: postgresql://user:password@host:port/database"
         exit 1
     fi
 fi
