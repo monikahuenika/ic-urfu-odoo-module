@@ -1,0 +1,8 @@
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_ic_urfu_subject_student,ic.urfu.subject student,model_ic_urfu_subject,group_ic_urfu_student,1,0,0,0
+access_ic_urfu_subject_teacher,ic.urfu.subject teacher,model_ic_urfu_subject,group_ic_urfu_teacher,1,1,1,1
+access_ic_urfu_semester_student,ic.urfu.semester student,model_ic_urfu_semester,group_ic_urfu_student,1,1,1,1
+access_ic_urfu_semester_teacher,ic.urfu.semester teacher,model_ic_urfu_semester,group_ic_urfu_teacher,1,1,1,1
+access_ic_urfu_plan_student,ic.urfu.plan student,model_ic_urfu_plan,group_ic_urfu_student,1,1,1,1
+access_ic_urfu_plan_teacher,ic.urfu.plan teacher,model_ic_urfu_plan,group_ic_urfu_teacher,1,1,0,0
+access_ic_urfu_config_settings,ic.urfu.config.settings,model_ic_urfu_config_settings,base.group_system,1,1,1,1
