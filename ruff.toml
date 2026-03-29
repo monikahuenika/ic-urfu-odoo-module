@@ -64,6 +64,8 @@ select = [
     "RUF",  # ruff-specific rules
 ]
 
+exclude = ["scripts/**/*.py"]
+
 ignore = [
     "S101",   # assert разрешён (pytest тесты)
     "COM812", # конфликт с ruff formatter (trailing comma)

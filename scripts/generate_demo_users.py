@@ -4,14 +4,12 @@ Script to generate demo_users.xml from credentials configuration.
 Run this after changing credentials in ic_urfu_module/config/demo_credentials.py
 """
 
-import sys
-import os
 import importlib.util
+import os
 
 # Load credentials module directly without importing the whole package
 creds_path = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    'ic_urfu_module', 'config', 'demo_credentials.py'
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "ic_urfu_module", "config", "demo_credentials.py"
 )
 
 spec = importlib.util.spec_from_file_location("demo_credentials", creds_path)
@@ -47,14 +45,13 @@ xml_content = f"""<?xml version="1.0" encoding="utf-8"?>
 
 # Write to file
 output_file = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    'ic_urfu_module', 'demo', 'demo_users.xml'
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "ic_urfu_module", "demo", "demo_users.xml"
 )
 
-with open(output_file, 'w', encoding='utf-8') as f:
+with open(output_file, "w", encoding="utf-8") as f:
     f.write(xml_content)
 
 print(f"✓ Generated {output_file}")
-print(f"\nCredentials used:")
+print("\nCredentials used:")
 print(f"  Student: {creds.STUDENT_LOGIN} / {creds.STUDENT_PASSWORD}")
 print(f"  Teacher: {creds.TEACHER_LOGIN} / {creds.TEACHER_PASSWORD}")

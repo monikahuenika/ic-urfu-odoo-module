@@ -1,4 +1,4 @@
-.PHONY: help init bootstrap start stop restart logs clean status shell db-shell test-generator update-credentials fix-passwords
+.PHONY: help init bootstrap start stop restart logs clean status shell db-shell test-generator update-credentials fix-passwords lint lint-fix lint-fmt
 
 # Default target
 help:
@@ -16,6 +16,9 @@ help:
 	@echo "  make shell              - Open shell in Odoo container"
 	@echo "  make db-shell           - Open PostgreSQL shell"
 	@echo "  make test-generator     - Test document generator standalone"
+	@echo "  make lint               - Run ruff linter (uv run ruff check)"
+	@echo "  make lint-fix           - Run ruff with auto-fix (uv run ruff check --fix)"
+	@echo "  make lint-fmt           - Run ruff formatter (uv run ruff format)"
 	@echo "  make update-credentials - Regenerate demo_users.xml from credentials config"
 	@echo "  make fix-passwords      - Fix user passwords if login fails"
 	@echo "  make clean              - Remove all data (containers, volumes, DB)"
@@ -114,6 +117,16 @@ test-generator:
 	@echo "Testing document generator..."
 	@cd ic_urfu_module/doc_generator && python3 doc_generator.py
 	@echo "✓ Document generated! Check ic_urfu_module/doc_generator/ for output."
+
+# Ruff (requires uv + ruff in project env)
+lint:
+	uv run ruff check .
+
+lint-fix:
+	uv run ruff check --fix .
+
+lint-fmt:
+	uv run ruff format .
 
 # Clean everything (WARNING: deletes all data!)
 clean:
