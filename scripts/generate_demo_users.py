@@ -5,12 +5,12 @@ Run this after changing credentials in ic_urfu_module/config/demo_credentials.py
 """
 
 import importlib.util
-import os
+from pathlib import Path
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent
 
 # Load credentials module directly without importing the whole package
-creds_path = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "ic_urfu_module", "config", "demo_credentials.py"
-)
+creds_path = _REPO_ROOT / "ic_urfu_module" / "config" / "demo_credentials.py"
 
 spec = importlib.util.spec_from_file_location("demo_credentials", creds_path)
 creds = importlib.util.module_from_spec(spec)
@@ -44,12 +44,8 @@ xml_content = f"""<?xml version="1.0" encoding="utf-8"?>
 """
 
 # Write to file
-output_file = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "ic_urfu_module", "demo", "demo_users.xml"
-)
-
-with open(output_file, "w", encoding="utf-8") as f:
-    f.write(xml_content)
+output_file = _REPO_ROOT / "ic_urfu_module" / "demo" / "demo_users.xml"
+output_file.write_text(xml_content, encoding="utf-8")
 
 print(f"✓ Generated {output_file}")
 print("\nCredentials used:")

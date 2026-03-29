@@ -64,8 +64,6 @@ select = [
     "RUF",  # ruff-specific rules
 ]
 
-exclude = ["scripts/**/*.py"]
-
 ignore = [
     "S101",   # assert разрешён (pytest тесты)
     "COM812", # конфликт с ruff formatter (trailing comma)
@@ -113,6 +111,7 @@ ban-relative-imports = "parents" # запрет на ../../ импорты
 "app/core/config.py" = [
     "S105", # Pydantic Settings — не хардкод, а defaults
 ]
+"scripts/**/*.py" = ["T201"]
 
 [format]
 quote-style = "double"
