@@ -1,55 +1,43 @@
 #!/bin/bash
-# Script to fix user passwords if login fails
+# Reset student/teacher passwords (users must exist — run make upgrade-module once after pulling data/demo_users.xml).
 
 set -e
 
 echo "=========================================="
-echo "  Fixing User Passwords"
+echo "  Demo user passwords"
 echo "=========================================="
 echo ""
 
-# Check if containers are running
 if ! docker ps | grep -q odoo_app; then
     echo "❌ Error: Odoo container is not running!"
     echo "   Start it with: make start"
     exit 1
 fi
 
-echo "🔧 Updating passwords in database..."
-echo ""
-
-# Execute password update directly via stdin
-docker exec -i odoo_app odoo shell -c /etc/odoo/odoo.conf -d odoo --no-http 2>&1 <<'PYEOF' | grep -E '(✓|✗|✅|Password)'
-# Update student password
-student = env['res.users'].search([('login', '=', 'student')], limit=1)
+docker exec -i odoo_app odoo shell -c /etc/odoo/odoo.conf -d odoo --no-http 2>&1 <<'PYEOF'
+missing = []
+student = env["res.users"].search([("login", "=", "student")], limit=1)
 if student:
-    student.write({'password': 'student'})
-    print('✓ Student password updated (ID: {})'.format(student.id))
+    student.write({"password": "student"})
+    print("✓ Student password set (id=%s)" % student.id)
 else:
-    print('✗ Student user not found!')
+    missing.append("student")
+    print("✗ No login=student — run: make upgrade-module")
 
-# Update teacher password
-teacher = env['res.users'].search([('login', '=', 'teacher')], limit=1)
+teacher = env["res.users"].search([("login", "=", "teacher")], limit=1)
 if teacher:
-    teacher.write({'password': 'teacher'})
-    print('✓ Teacher password updated (ID: {})'.format(teacher.id))
+    teacher.write({"password": "teacher"})
+    print("✓ Teacher password set (id=%s)" % teacher.id)
 else:
-    print('✗ Teacher user not found!')
+    missing.append("teacher")
+    print("✗ No login=teacher — run: make upgrade-module")
 
 env.cr.commit()
-print('')
-print('✅ Passwords updated successfully!')
+if missing:
+    print("")
+    print("Create users from XML: make upgrade-module")
 PYEOF
 
 echo ""
 echo "=========================================="
-echo "  ✅ Done!"
-echo "=========================================="
-echo ""
-echo "🔐 You can now login with:"
-echo ""
-echo "   Student:  student / student"
-echo "   Teacher:  teacher / teacher"
-echo ""
-echo "🌐 URL: http://localhost:8069"
 echo ""

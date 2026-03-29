@@ -26,11 +26,11 @@ docker-compose down -v
 
 - **Odoo**: http://localhost:8069
 - **PostgreSQL**: localhost:5432
-- **База данных**: urfu
+- **База данных**: `odoo` (как в `make init` / `scripts/init.sh`)
 
 ## Учетные данные
 
-### Odoo (база: urfu)
+### Odoo (база: odoo)
 - **Admin**: admin / admin
 - **Студент**: student / student
 - **Преподаватель**: teacher / teacher
@@ -62,6 +62,6 @@ docker logs -f odoo_db
 После изменения кода модуля:
 
 ```bash
-docker exec odoo_app odoo -d urfu -u ic_urfu_module --stop-after-init
+docker exec odoo_app odoo -c /etc/odoo/odoo.conf -d odoo -u ic_urfu_module --stop-after-init
 docker restart odoo_app
 ```

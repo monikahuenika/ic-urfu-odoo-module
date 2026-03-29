@@ -19,7 +19,8 @@ spec.loader.exec_module(creds)
 # Generate XML content
 xml_content = f"""<?xml version="1.0" encoding="utf-8"?>
 <odoo>
-    <data noupdate="0">
+    <!-- Regular data: user records (see __manifest__.py). -->
+    <data noupdate="1">
         <!-- Демо пользователь: Студент -->
         <record id="user_demo_student" model="res.users">
             <field name="name">{creds.STUDENT_NAME}</field>
@@ -44,7 +45,7 @@ xml_content = f"""<?xml version="1.0" encoding="utf-8"?>
 """
 
 # Write to file
-output_file = _REPO_ROOT / "ic_urfu_module" / "demo" / "demo_users.xml"
+output_file = _REPO_ROOT / "ic_urfu_module" / "data" / "demo_users.xml"
 output_file.write_text(xml_content, encoding="utf-8")
 
 print(f"✓ Generated {output_file}")
