@@ -1,6 +1,6 @@
-
 # Copyright <2026> Michael <->
 # License LGPL-3
+
 
 def pre_init_hook(cr):
     """Hook executed before module installation.

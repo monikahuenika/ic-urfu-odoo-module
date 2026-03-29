@@ -1,0 +1,451 @@
+---
+description: "SQLAlchemy 2.x async паттерны: ORM модели, сессии, репозитории, Alembic миграции. Применять при работе с data/ слоем — models/, repositories/, db/, migrations/."
+globs: ["app/data/**/*.py", "app/data/migrations/**/*.py"]
+alwaysApply: false
+priority: 101
+triggers: ["file_create", "file_change", "intent_debug"]
+related_docs: [
+    "app/data/db/session.py",
+    "app/data/db/base.py",
+    "app/domain/interfaces/",
+    "alembic.ini"
+]
+---
+
+# Database Patterns — SQLAlchemy 2.x Async
+
+## Архитектурные границы data/ слоя
+
+# КРИТИЧЕСКИ ВАЖНО:
+- ORM модели (`data/models/`) НИКОГДА не покидают `data/` слой
+- Репозитории реализуют интерфейсы из `domain/interfaces/` — не придумывают свой API
+- `AsyncSession` живёт только в репозиториях и `deps.py` — не в `domain/`
+- Маппинг `ORM → domain entity` происходит ТОЛЬКО в репозитории
+
+✅ Правильное направление зависимостей:
+```
+data/repositories/user_repository.py
+    → implements → domain/interfaces/user_repository.py (AbstractUserRepository)
+    → uses       → data/models/user.py (UserORM)
+    → returns    → domain/entities/user.py (User)
+```
+
+❌ Запрещено:
+```python
+# domain/use_cases/user_service.py — НИКОГДА
+from app.data.models.user import UserORM          # ORM в domain — ЗАПРЕЩЕНО
+from sqlalchemy.ext.asyncio import AsyncSession   # SQLAlchemy в domain — ЗАПРЕЩЕНО
+```
+
+## 1. ORM Модели — data/models/
+
+*Причина*: `DeclarativeBase` + `Mapped` — единственный современный стиль
+SQLAlchemy 2.x. Даёт полную типизацию, совместимость с mypy/ruff,
+автодополнение в IDE. Суффикс `ORM` чётко отделяет от domain entities.
+
+### Base класс с общими миксинами
+```python
+# app/data/db/base.py
+import uuid
+from datetime import UTC, datetime
+from typing import Optional
+
+from sqlalchemy import DateTime, func
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+
+
+class Base(DeclarativeBase):
+    """Базовый класс для всех ORM моделей."""
+    pass
+
+
+class TimestampMixin:
+    """Миксин для автоматических временных меток.
+
+    Причина: func.now() выполняется на уровне БД —
+    не зависит от часового пояса сервера приложения.
+    """
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        insert_default=func.now(),
+        nullable=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        insert_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+
+class SoftDeleteMixin:
+    """Миксин для мягкого удаления вместо физического DELETE."""
+    deleted_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        default=None,
+        nullable=True,
+    )
+```
+
+### ORM модель
+
+*Причина*: UUID как primary key — лучше для распределённых систем и
+безопасности (нельзя угадать следующий ID).
+
+✅ Правильно:
+```python
+# app/data/models/user.py
+import uuid
+from typing import Optional
+
+from sqlalchemy import String
+from sqlalchemy.orm import Mapped, mapped_column
+
+from app.data.db.base import Base, TimestampMixin
+
+
+class UserORM(Base, TimestampMixin):
+    """SQLAlchemy ORM модель пользователя.
+
+    Не использовать напрямую вне data/ слоя.
+    Для бизнес-логики — domain/entities/user.py (User).
+    """
+    __tablename__ = "users"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        primary_key=True,
+        default=uuid.uuid4,
+    )
+    email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False, index=True)
+    full_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    hashed_password: Mapped[str] = mapped_column(String(255), nullable=False)
+    is_active: Mapped[bool] = mapped_column(default=True, nullable=False)
+```
+
+❌ Неправильно:
+```python
+# Устаревший стиль SQLAlchemy 1.x — ЗАПРЕЩЁН
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy import Column, Integer, String
+
+Base = declarative_base()
+
+class User(Base):  # нет суффикса ORM — путаница с domain entity
+    __tablename__ = "users"
+    id = Column(Integer, primary_key=True)   # нет Mapped — нет типизации
+    name = Column(String)                    # Integer PK вместо UUID
+```
+
+## 2. Async Session — data/db/session.py
+
+*Причина*: `async_sessionmaker` + `AsyncSession` — единственный способ
+работать с PostgreSQL без блокировки event loop. `asyncpg` драйвер
+даёт максимальную производительность для PostgreSQL.
+```python
+# app/data/db/session.py
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
+
+from app.core.config import settings
+
+
+def build_engine() -> AsyncEngine:
+    """Создать async движок для PostgreSQL.
+
+    pool_pre_ping — проверяет соединение перед использованием,
+    защищает от "stale connection" после простоя.
+    """
+    return create_async_engine(
+        settings.DATABASE_URL,       # postgresql+asyncpg://...
+        echo=settings.DB_ECHO,       # SQL лог только в debug режиме
+        pool_size=10,
+        max_overflow=20,
+        pool_pre_ping=True,
+        pool_recycle=3600,           # пересоздавать соединения каждый час
+    )
+
+
+engine: AsyncEngine = build_engine()
+
+async_session_factory: async_sessionmaker[AsyncSession] = async_sessionmaker(
+    bind=engine,
+    autocommit=False,
+    autoflush=False,
+    expire_on_commit=False,   # не сбрасывать атрибуты после commit
+)
+```
+
+# КРИТИЧЕСКИ ВАЖНО:
+- URL формат: `postgresql+asyncpg://` — не `postgresql://` (синхронный)
+- `expire_on_commit=False` — иначе атрибуты объекта недоступны после commit
+- `pool_pre_ping=True` — обязателен в продакшне
+- `echo=True` только в dev/debug — в prod засоряет логи
+
+## 3. Repository Pattern — data/repositories/
+
+*Причина*: репозиторий — единственная точка доступа к БД для конкретного
+агрегата. Реализует абстрактный интерфейс из `domain/` — это позволяет
+в тестах подменять реальный репозиторий на in-memory заглушку.
+
+### Абстрактный интерфейс (domain слой)
+```python
+# app/domain/interfaces/user_repository.py
+import uuid
+from abc import ABC, abstractmethod
+
+from app.domain.entities.user import User, UserCreate
+
+
+class AbstractUserRepository(ABC):
+    """Порт для работы с пользователями.
+
+    Domain слой зависит только от этого интерфейса —
+    не от SQLAlchemy, не от PostgreSQL.
+    """
+
+    @abstractmethod
+    async def get_by_id(self, user_id: uuid.UUID) -> User | None: ...
+
+    @abstractmethod
+    async def get_by_email(self, email: str) -> User | None: ...
+
+    @abstractmethod
+    async def create(self, data: UserCreate) -> User: ...
+
+    @abstractmethod
+    async def update(self, user: User) -> User: ...
+
+    @abstractmethod
+    async def delete(self, user_id: uuid.UUID) -> None: ...
+```
+
+### Конкретная реализация (data слой)
+```python
+# app/data/repositories/user_repository.py
+import uuid
+
+import structlog
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.data.models.user import UserORM
+from app.domain.entities.user import User, UserCreate
+from app.domain.interfaces.user_repository import AbstractUserRepository
+
+logger = structlog.get_logger(__name__)
+
+
+class UserRepository(AbstractUserRepository):
+    """PostgreSQL реализация репозитория пользователей."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def get_by_id(self, user_id: uuid.UUID) -> User | None:
+        """Получить пользователя по UUID."""
+        orm_obj = await self._session.get(UserORM, user_id)
+        if orm_obj is None:
+            return None
+        return self._to_entity(orm_obj)
+
+    async def get_by_email(self, email: str) -> User | None:
+        """Получить пользователя по email."""
+        stmt = select(UserORM).where(UserORM.email == email)
+        orm_obj = await self._session.scalar(stmt)
+        return self._to_entity(orm_obj) if orm_obj else None
+
+    async def create(self, data: UserCreate) -> User:
+        """Создать пользователя и вернуть domain entity."""
+        orm_obj = UserORM(
+            email=data.email,
+            full_name=data.full_name,
+            hashed_password=data.hashed_password,
+        )
+        self._session.add(orm_obj)
+        await self._session.flush()   # получить id без commit
+        await self._session.refresh(orm_obj)
+        logger.info("user.created", user_id=str(orm_obj.id))
+        return self._to_entity(orm_obj)
+
+    async def update(self, user: User) -> User:
+        """Обновить пользователя из domain entity."""
+        orm_obj = await self._session.get(UserORM, user.id)
+        if orm_obj is None:
+            from app.domain.exceptions import UserNotFoundError
+            raise UserNotFoundError(str(user.id))
+        orm_obj.full_name = user.full_name
+        orm_obj.is_active = user.is_active
+        await self._session.flush()
+        await self._session.refresh(orm_obj)
+        return self._to_entity(orm_obj)
+
+    async def delete(self, user_id: uuid.UUID) -> None:
+        """Физически удалить пользователя."""
+        orm_obj = await self._session.get(UserORM, user_id)
+        if orm_obj is not None:
+            await self._session.delete(orm_obj)
+            await self._session.flush()
+
+    @staticmethod
+    def _to_entity(orm_obj: UserORM) -> User:
+        """Маппинг ORM → domain entity.
+
+        Причина: domain entity не знает про ORM.
+        Маппинг происходит только здесь — в одном месте.
+        """
+        return User(
+            id=orm_obj.id,
+            email=orm_obj.email,
+            full_name=orm_obj.full_name,
+            is_active=orm_obj.is_active,
+            created_at=orm_obj.created_at,
+        )
+```
+
+## 4. Запросы — только select() стиль 2.x
+
+*Причина*: `session.query()` — устаревший API SQLAlchemy 1.x,
+удалён в 2.0. `select()` даёт полную типизацию и composability.
+
+✅ Правильно:
+```python
+from sqlalchemy import select
+from sqlalchemy.orm import selectinload
+
+# Один объект
+stmt = select(UserORM).where(UserORM.email == email)
+user = await session.scalar(stmt)
+
+# Список
+stmt = select(UserORM).where(UserORM.is_active == True).order_by(UserORM.created_at.desc())
+users = (await session.scalars(stmt)).all()
+
+# С eager loading связей (избегаем N+1)
+stmt = (
+    select(UserORM)
+    .options(selectinload(UserORM.orders))  # не lazy load в цикле
+    .where(UserORM.is_active == True)
+)
+```
+
+❌ Неправильно:
+```python
+# Legacy Query API — ЗАПРЕЩЁН в SQLAlchemy 2.x
+users = session.query(UserORM).filter(UserORM.is_active == True).all()
+
+# Lazy loading в цикле — N+1 проблема
+users = (await session.scalars(select(UserORM))).all()
+for user in users:
+    orders = user.orders  # каждый вызов — отдельный SQL запрос!
+```
+
+## 5. Транзакции
+
+*Причина*: commit делается ТОЛЬКО в `deps.py` (один раз за request).
+Репозитории используют `flush()` для получения ID без завершения транзакции.
+Это гарантирует атомарность операций в одном use case.
+
+✅ Правильно:
+```python
+# deps.py управляет транзакцией
+async def get_db() -> AsyncGenerator[AsyncSession, None]:
+    async with async_session_factory() as session:
+        try:
+            yield session
+            await session.commit()   # commit ПОСЛЕ всей бизнес-логики
+        except Exception:
+            await session.rollback()
+            raise
+
+# Репозиторий использует только flush()
+async def create(self, data: UserCreate) -> User:
+    orm_obj = UserORM(...)
+    self._session.add(orm_obj)
+    await self._session.flush()    # ID получен, транзакция НЕ завершена
+    return self._to_entity(orm_obj)
+```
+
+❌ Неправильно:
+```python
+# commit() в репозитории — ЗАПРЕЩЕНО
+async def create(self, data: UserCreate) -> User:
+    self._session.add(orm_obj)
+    await self._session.commit()   # транзакция закрыта раньше времени
+    # если после этого упадёт другой репозиторий — откат невозможен
+```
+
+## 6. Bulk операции
+
+*Причина*: для массовых вставок/обновлений ORM overhead слишком велик.
+Core insert/update обходит ORM события, но работает в 10-50x быстрее.
+```python
+from sqlalchemy import insert, update
+
+# Bulk insert — обходит ORM, нет onupdate хуков
+async def bulk_create(self, items: list[dict]) -> None:
+    await self._session.execute(insert(UserORM), items)
+    await self._session.flush()
+
+# Bulk update по условию
+async def deactivate_inactive(self, days: int) -> int:
+    from datetime import UTC, datetime, timedelta
+    cutoff = datetime.now(UTC) - timedelta(days=days)
+    result = await self._session.execute(
+        update(UserORM)
+        .where(UserORM.last_login < cutoff)
+        .values(is_active=False)
+    )
+    return result.rowcount
+```
+
+## 7. Alembic — async миграции
+
+*Причина*: `alembic init -t async` генерирует шаблон с async engine.
+Обычный (sync) шаблон не совместим с asyncpg.
+```bash
+# Инициализация (один раз)
+alembic init -t async app/data/migrations
+
+# Создать миграцию (автогенерация из моделей)
+uv run alembic revision --autogenerate -m "add users table"
+
+# Применить все миграции
+uv run alembic upgrade head
+
+# Откат на одну версию назад
+uv run alembic downgrade -1
+
+# Просмотр истории
+uv run alembic history --verbose
+```
+
+`alembic.ini` — путь к миграциям:
+```ini
+script_location = app/data/migrations
+sqlalchemy.url = postgresql+asyncpg://%(DB_USER)s:%(DB_PASS)s@%(DB_HOST)s/%(DB_NAME)s
+```
+
+`app/data/migrations/env.py` — подключаем наши модели:
+```python
+from app.data.db.base import Base
+# Импортировать все модели чтобы Alembic их видел
+from app.data.models import user  # noqa: F401
+
+target_metadata = Base.metadata
+```
+
+# КРИТИЧЕСКИ ВАЖНО:
+- Никогда не менять схему БД вручную — только через Alembic
+- `--autogenerate` генерирует миграцию, но ВСЕГДА проверяй её вручную
+- Миграции коммитятся в репо вместе с кодом модели
+- `downgrade()` обязателен в каждой миграции — для возможности отката
+
+# ВАЖНО:
+- `session.get(Model, pk)` — для поиска по primary key (оптимально)
+- `selectinload` для коллекций, `joinedload` для одиночных связей
+- `flush()` в репозитории, `commit()` только в `deps.py`
+- Все datetime поля — `DateTime(timezone=True)`, никогда без timezone

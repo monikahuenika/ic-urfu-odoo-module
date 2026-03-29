@@ -1,0 +1,119 @@
+# https://docs.astral.sh/ruff/configuration/
+line-length = 120
+target-version = "py312"
+indent-width = 4
+
+[lint]
+select = [
+    # --- Стиль и ошибки ---
+    "E",  # pycodestyle errors
+    "W",  # pycodestyle warnings
+    "F",  # pyflakes (неиспользуемые импорты, переменные)
+    "N",  # pep8-naming (соглашения именования)
+    "UP", # pyupgrade (современный синтаксис Python)
+
+    # --- Сортировка импортов ---
+    "I", # isort
+
+    # --- Безопасность ---
+    "S", # flake8-bandit (потенциальные уязвимости)
+
+    # --- Баги и антипаттерны ---
+    "B",    # flake8-bugbear (частые ошибки и плохие практики)
+    "A",    # flake8-builtins (затенение встроенных имён)
+    "C90",  # mccabe (цикломатическая сложность)
+    "SIM",  # flake8-simplify (упрощение кода)
+    "PERF", # perflint (проблемы производительности)
+    "FURB", # refurb (современные паттерны Python)
+
+    # --- Форматирование строк ---
+    "G",   # flake8-logging-format (f-строки в логах — запрещены)
+    "Q",   # flake8-quotes (единый стиль кавычек)
+    "FLY", # flynt (f-строки вместо конкатенации)
+
+    # --- Чистота кода ---
+    "T20", # flake8-print (print() в продакшн коде — запрещён)
+    "COM", # flake8-commas (trailing commas)
+    "RET", # flake8-return (правила return)
+    "RSE", # flake8-raise (правила raise)
+    "SLF", # flake8-self (обращение к приватным атрибутам)
+    "ARG", # flake8-unused-arguments (неиспользуемые аргументы)
+    "PTH", # flake8-use-pathlib (Path вместо os.path)
+    "TID", # flake8-tidy-imports (запрет относительных импортов)
+
+    # --- Типизация ---
+    "TC",  # flake8-type-checking (TYPE_CHECKING блоки)
+    "PYI", # flake8-pyi (стаб-файлы)
+
+    # --- Pylint ---
+    "PLC", # pylint convention
+    "PLE", # pylint errors
+    "PLW", # pylint warnings
+
+    # --- Async ---
+    "ASYNC", # flake8-async (блокирующие вызовы в async контексте)
+
+    # --- Прочее ---
+    "DTZ",  # flake8-datetimez (timezone-aware datetime обязателен)
+    "INT",  # flake8-gettext
+    "ICN",  # flake8-import-conventions (стандартные алиасы)
+    "LOG",  # flake8-logging (правила логирования)
+    "PT",   # flake8-pytest-style (стиль pytest)
+    "SLOT", # flake8-slots (__slots__ для классов)
+    "FAST", # FastAPI-специфичные правила (Annotated Depends и др.)
+    "RUF",  # ruff-specific rules
+]
+
+ignore = [
+    "S101",   # assert разрешён (pytest тесты)
+    "COM812", # конфликт с ruff formatter (trailing comma)
+    "TID252", # разрешить относительные импорты внутри пакета
+    "RUF001",
+    "RUF002",
+    "RUF003",
+]
+
+unfixable = [
+    "F841", # не удалять неиспользуемые переменные автоматически
+    "T20",  # не удалять print() автоматически — требует ревью
+]
+
+[lint.isort]
+known-first-party = ["ic_urfu_module", "app"]
+force-sort-within-sections = true
+
+[lint.mccabe]
+max-complexity = 10 # выше — обязательный рефакторинг
+
+[lint.flake8-bugbear]
+extend-immutable-calls = [
+    "fastapi.Depends",
+    "fastapi.Query",
+    "fastapi.Header",
+    "fastapi.Path",
+    "fastapi.Body",
+]
+
+[lint.flake8-tidy-imports]
+ban-relative-imports = "parents" # запрет на ../../ импорты
+
+[lint.per-file-ignores]
+"tests/**/*.py" = [
+    "S101",   # assert — основа pytest
+    "ARG",    # fixture аргументы могут быть "неиспользуемыми"
+    "SLF001", # тесты могут проверять приватные атрибуты
+    "PT",     # гибкость стиля внутри тестов
+]
+"app/data/migrations/**/*.py" = [
+    "N999",   # Alembic генерирует имена файлов с датой
+    "ARG001", # `op` и `sa` — стандартные alembic аргументы
+]
+"app/core/config.py" = [
+    "S105", # Pydantic Settings — не хардкод, а defaults
+]
+
+[format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"

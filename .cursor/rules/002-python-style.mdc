@@ -1,0 +1,319 @@
+---
+description: "Правила стиля Python кода: ruff конфигурация, типизация, именование, структура модулей, docstrings. Применять при написании любого .py файла."
+globs: ["**/*.py"]
+alwaysApply: true
+priority: 2
+triggers: ["file_create", "file_change"]
+---
+
+# Python Style Rules
+
+## Ruff — единственный инструмент форматирования
+
+*Причина*: ruff заменяет black + isort + flake8 одновременно,
+работает в 10-100x быстрее. Конфиг живёт в `ruff.toml` в корне
+проекта — отдельно от pyproject.toml, чтобы ruff подхватывал
+конфиг независимо от контекста запуска (CI, pre-commit, editor).
+
+Конфигурация в `ruff.toml`:
+```toml
+# ruff.toml
+line-length = 120
+target-version = "py312"
+indent-width = 4
+
+[lint]
+select = [
+    # --- Стиль и ошибки ---
+    "E",     # pycodestyle errors
+    "W",     # pycodestyle warnings
+    "F",     # pyflakes (неиспользуемые импорты, переменные)
+    "N",     # pep8-naming (соглашения именования)
+    "UP",    # pyupgrade (современный синтаксис Python)
+
+    # --- Сортировка импортов ---
+    "I",     # isort
+
+    # --- Безопасность ---
+    "S",     # flake8-bandit (потенциальные уязвимости)
+
+    # --- Баги и антипаттерны ---
+    "B",     # flake8-bugbear (частые ошибки и плохие практики)
+    "A",     # flake8-builtins (затенение встроенных имён)
+    "C90",   # mccabe (цикломатическая сложность)
+    "SIM",   # flake8-simplify (упрощение кода)
+    "PERF",  # perflint (проблемы производительности)
+    "FURB",  # refurb (современные паттерны Python)
+
+    # --- Форматирование строк ---
+    "G",     # flake8-logging-format (f-строки в логах — запрещены)
+    "Q",     # flake8-quotes (единый стиль кавычек)
+    "FLY",   # flynt (f-строки вместо конкатенации)
+
+    # --- Чистота кода ---
+    "T20",   # flake8-print (print() в продакшн коде — запрещён)
+    "COM",   # flake8-commas (trailing commas)
+    "RET",   # flake8-return (правила return)
+    "RSE",   # flake8-raise (правила raise)
+    "SLF",   # flake8-self (обращение к приватным атрибутам)
+    "ARG",   # flake8-unused-arguments (неиспользуемые аргументы)
+    "PTH",   # flake8-use-pathlib (Path вместо os.path)
+    "TID",   # flake8-tidy-imports (запрет относительных импортов)
+
+    # --- Типизация ---
+    "TC",    # flake8-type-checking (TYPE_CHECKING блоки)
+    "PYI",   # flake8-pyi (стаб-файлы)
+
+    # --- Pylint ---
+    "PLC",   # pylint convention
+    "PLE",   # pylint errors
+    "PLW",   # pylint warnings
+
+    # --- Async ---
+    "ASYNC", # flake8-async (блокирующие вызовы в async контексте)
+
+    # --- Прочее ---
+    "DTZ",   # flake8-datetimez (timezone-aware datetime обязателен)
+    "INT",   # flake8-gettext
+    "ICN",   # flake8-import-conventions (стандартные алиасы)
+    "LOG",   # flake8-logging (правила логирования)
+    "PT",    # flake8-pytest-style (стиль pytest)
+    "SLOT",  # flake8-slots (__slots__ для классов)
+    "FAST",  # FastAPI-специфичные правила (Annotated Depends и др.)
+    "RUF",   # ruff-specific rules
+]
+
+ignore = [
+    "S101",   # assert разрешён (pytest тесты)
+    "COM812", # конфликт с ruff formatter (trailing comma)
+    "TID252", # разрешить относительные импорты внутри пакета
+]
+
+unfixable = [
+    "F841",  # не удалять неиспользуемые переменные автоматически
+    "T20",   # не удалять print() автоматически — требует ревью
+]
+
+[lint.isort]
+known-first-party = ["app"]
+force-sort-within-sections = true
+
+[lint.mccabe]
+max-complexity = 10  # выше — обязательный рефакторинг
+
+[lint.flake8-bugbear]
+extend-immutable-calls = [
+    "fastapi.Depends",
+    "fastapi.Query",
+    "fastapi.Header",
+    "fastapi.Path",
+    "fastapi.Body",
+]
+
+[lint.flake8-tidy-imports]
+ban-relative-imports = "parents"  # запрет на ../../ импорты
+
+[lint.per-file-ignores]
+"tests/**/*.py" = [
+    "S101",   # assert — основа pytest
+    "ARG",    # fixture аргументы могут быть "неиспользуемыми"
+    "SLF001", # тесты могут проверять приватные атрибуты
+    "PT",     # гибкость стиля внутри тестов
+]
+"app/data/migrations/**/*.py" = [
+    "N999",   # Alembic генерирует имена файлов с датой
+    "ARG001", # `op` и `sa` — стандартные алembic аргументы
+]
+"app/core/config.py" = [
+    "S105",   # Pydantic Settings — не хардкод, а defaults
+]
+
+[format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"
+```
+
+# КРИТИЧЕСКИ ВАЖНО:
+- `ruff.toml` живёт в корне проекта, `pyproject.toml` — без секции `[tool.ruff]`
+- Запуск линтера: `uv run ruff check .`
+- Запуск форматтера: `uv run ruff format .`
+- Автофикс: `uv run ruff check --fix .`
+- `print()` в коде — ЗАПРЕЩЁН (T20), используй только structlog
+- `datetime.now()` без timezone — ЗАПРЕЩЁН (DTZ), только `datetime.now(UTC)`
+
+✅ Правильно:
+```bash
+project/
+├── ruff.toml        # конфиг ruff — единственное место
+├── pyproject.toml   # без [tool.ruff]
+├── alembic.ini
+└── app/
+```
+
+❌ Неправильно:
+```bash
+project/
+├── ruff.toml
+├── pyproject.toml   # + [tool.ruff] внутри — КОНФЛИКТ приоритетов
+└── app/
+```
+
+## Типизация — обязательна везде
+
+*Причина*: TC rules оптимизируют импорты типов через `TYPE_CHECKING`,
+снижая overhead при старте. FAST002 требует `Annotated` для Depends.
+
+✅ Правильно:
+```python
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Annotated
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+async def get_user(
+    user_id: int,
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> User | None: ...
+```
+
+❌ Неправильно:
+```python
+# Импорт тяжёлого типа вне TYPE_CHECKING — лишний overhead
+from sqlalchemy.ext.asyncio import AsyncSession
+
+async def get_user(user_id, db):  # нет типов — ANN violation
+    ...
+```
+
+## Datetime — всегда timezone-aware
+
+*Причина*: DTZ rules запрещают naive datetime — источник
+трудноуловимых багов при работе с разными таймзонами.
+
+✅ Правильно:
+```python
+from datetime import UTC, datetime
+
+created_at = datetime.now(UTC)
+expires_at = datetime.now(UTC) + timedelta(hours=1)
+```
+
+❌ Неправильно:
+```python
+created_at = datetime.now()       # DTZ005 — нет timezone
+created_at = datetime.utcnow()    # DTZ003 — устарело, UP deprecated
+```
+
+## Логирование — только structlog, никаких f-строк
+
+*Причина*: G rules (flake8-logging-format) запрещают f-строки
+в log calls — это лишняя интерполяция при отключённом уровне лога.
+structlog принимает kwargs, что решает проблему элегантно.
+
+✅ Правильно:
+```python
+import structlog
+logger = structlog.get_logger(__name__)
+
+logger.info("user.created", user_id=str(user.id), email=user.email)
+logger.error("db.query_failed", error=str(e), table="users")
+```
+
+❌ Неправильно:
+```python
+import logging
+logger = logging.getLogger(__name__)
+
+logger.info(f"User {user.id} created")    # G004 — f-строка в логе
+print(f"Created user: {user.id}")         # T201 — print запрещён
+```
+
+## Именование
+
+| Объект              | Стиль                    | Пример                              |
+| ------------------- | ------------------------ | ----------------------------------- |
+| Модули, пакеты      | snake_case               | `user_service.py`                   |
+| Классы              | PascalCase               | `UserService`                       |
+| Функции, переменные | snake_case               | `get_user_by_id`                    |
+| Константы           | UPPER_SNAKE              | `MAX_RETRY_COUNT`                   |
+| Private             | `_prefix`                | `_build_query`                      |
+| Pydantic schemas    | PascalCase + суффикс     | `UserCreateRequest`, `UserResponse` |
+| SQLAlchemy ORM      | PascalCase + ORM суффикс | `UserORM`, `OrderORM`               |
+| Domain entities     | PascalCase без суффикса  | `User`, `Order`                     |
+| Abstract interfaces | `Abstract` prefix        | `AbstractUserRepository`            |
+
+## Импорты
+
+✅ Правильно:
+```python
+from __future__ import annotations
+
+# 1. stdlib
+import uuid
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING, Annotated
+
+# 2. third-party
+import structlog
+from fastapi import Depends, HTTPException, status
+from sqlalchemy.ext.asyncio import AsyncSession
+
+# 3. first-party (всегда абсолютные — TID252)
+from app.core.config import settings
+from app.domain.entities.user import User
+from app.domain.exceptions import UserNotFoundError
+
+if TYPE_CHECKING:
+    from app.domain.interfaces.user_repository import AbstractUserRepository
+```
+
+❌ Неправильно:
+```python
+from ..models import User      # TID — относительный импорт через parent
+from app.models import *       # F403 — wildcard импорт
+import os, sys                 # E401 — несколько модулей в одной строке
+```
+
+## Docstrings — Google style, обязательны для публичного API
+
+✅ Правильно:
+```python
+async def create_user(user_data: UserCreateRequest, db: AsyncSession) -> User:
+    """Создать нового пользователя в базе данных.
+
+    Args:
+        user_data: Валидированные данные нового пользователя.
+        db: Асинхронная сессия базы данных.
+
+    Returns:
+        Созданный объект User с заполненным id.
+
+    Raises:
+        UserAlreadyExistsError: Если email уже зарегистрирован.
+    """
+```
+
+## uv — менеджер зависимостей
+
+# КРИТИЧЕСКИ ВАЖНО:
+- Добавить зависимость: `uv add <package>`
+- Dev-зависимость: `uv add --dev <package>`
+- Запуск: `uv run python` / `uv run pytest` / `uv run ruff check .`
+- `uv.lock` — коммитится в репо, не редактируется вручную
+
+✅ Правильно:
+```bash
+uv add "fastapi[standard]" sqlalchemy[asyncio] asyncpg
+uv add --dev pytest pytest-asyncio ruff
+uv run pytest tests/ -v
+```
+
+❌ Неправильно:
+```bash
+pip install fastapi   # ЗАПРЕЩЕНО
+python -m pytest      # ЗАПРЕЩЕНО — используй uv run
+```

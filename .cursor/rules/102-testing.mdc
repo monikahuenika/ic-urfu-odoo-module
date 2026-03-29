@@ -1,0 +1,518 @@
+---
+description: "pytest паттерны для async FastAPI: фикстуры, conftest, pytest-asyncio, моки репозиториев через dependency_overrides, интеграционные тесты с тестовой БД. Применять при работе с tests/."
+globs: ["tests/**/*.py", "conftest.py"]
+alwaysApply: false
+priority: 102
+triggers: ["file_create", "file_change", "intent_debug"]
+related_docs: [
+    "app/api/deps.py",
+    "app/domain/interfaces/",
+    "pyproject.toml"
+]
+---
+
+# Testing Patterns — pytest + pytest-asyncio
+
+## Структура тестов
+
+*Причина*: зеркальная структура `tests/` → `app/` упрощает навигацию
+и поиск тестов для конкретного модуля. `conftest.py` на каждом уровне
+держит фикстуры рядом с тестами, которые их используют.
+```
+tests/
+├── conftest.py                  # глобальные фикстуры: engine, session, app
+├── unit/                        # тесты domain слоя — без БД, без HTTP
+│   ├── conftest.py
+│   ├── use_cases/
+│   │   └── test_user_service.py
+│   └── entities/
+│       └── test_user.py
+├── integration/                 # тесты с реальной тестовой БД
+│   ├── conftest.py
+│   └── repositories/
+│       └── test_user_repository.py
+└── api/                         # тесты HTTP слоя через AsyncClient
+    ├── conftest.py
+    └── v1/
+        └── test_users.py
+```
+
+## pyproject.toml — конфигурация pytest
+```toml
+[tool.pytest.ini_options]
+asyncio_mode = "auto"            # все async тесты автоматически async
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = [
+    "--strict-markers",          # неизвестные маркеры = ошибка
+    "--tb=short",
+    "--cov=app",
+    "--cov-report=term-missing",
+    "--cov-report=html:coverage_html",
+    "--cov-fail-under=80",
+]
+
+[tool.coverage.run]
+omit = [
+    "app/data/migrations/*",
+    "app/core/config.py",
+]
+```
+
+Dev зависимости:
+```bash
+uv add --dev pytest pytest-asyncio pytest-cov pytest-mock httpx anyio
+```
+
+## 1. Именование и структура тестов
+
+*Причина*: описательные имена тестов — это документация.
+Читая имя теста, должно быть понятно: что тестируем, при каком условии,
+какой ожидаем результат.
+
+✅ Правильно:
+```python
+# Паттерн: test_<что>_<условие>_<ожидаемый результат>
+def test_create_user_with_valid_data_returns_user(): ...
+def test_get_user_by_id_when_not_exists_raises_not_found_error(): ...
+def test_create_user_with_duplicate_email_raises_already_exists_error(): ...
+
+class TestUserService:
+    async def test_get_by_id_returns_correct_user(self): ...
+    async def test_get_by_id_when_user_not_found_raises_error(self): ...
+```
+
+❌ Неправильно:
+```python
+def test_user(): ...                    # не понятно что проверяем
+def test_create_user_and_email(): ...   # тестирует несколько вещей
+class UserServiceTest: ...              # неправильный префикс — не найдёт pytest
+def create_user(): ...                  # нет префикса test_ — не запустится
+```
+
+## 2. Принцип одного assert
+
+*Причина*: один тест — одно поведение. При падении сразу ясно что сломалось.
+Несколько assert в одном тесте маскируют реальную причину.
+
+✅ Правильно:
+```python
+async def test_create_user_sets_correct_email(
+    user_service: UserService,
+) -> None:
+    user = await user_service.create("test@example.com", "John Doe", "secret123")
+    assert user.email == "test@example.com"
+
+async def test_create_user_sets_active_by_default(
+    user_service: UserService,
+) -> None:
+    user = await user_service.create("test@example.com", "John Doe", "secret123")
+    assert user.is_active is True
+```
+
+❌ Неправильно:
+```python
+async def test_create_user(user_service: UserService) -> None:
+    user = await user_service.create("test@example.com", "John Doe", "secret123")
+    assert user.email == "test@example.com"   # если упадёт здесь —
+    assert user.is_active is True              # этот assert не выполнится
+    assert user.full_name == "John Doe"        # непонятно что именно сломалось
+```
+
+## 3. Unit тесты — in-memory репозитории
+
+*Причина*: unit тесты проверяют бизнес-логику в `domain/use_cases/`
+без БД и HTTP. Реальный репозиторий заменяется на in-memory заглушку,
+реализующую тот же `AbstractUserRepository` интерфейс.
+
+### In-memory репозиторий (tests/unit/conftest.py)
+```python
+# tests/unit/conftest.py
+import uuid
+from collections.abc import AsyncGenerator
+
+import pytest
+
+from app.domain.entities.user import User, UserCreate
+from app.domain.exceptions import UserAlreadyExistsError, UserNotFoundError
+from app.domain.interfaces.user_repository import AbstractUserRepository
+from app.domain.use_cases.user_service import UserService
+
+
+class InMemoryUserRepository(AbstractUserRepository):
+    """In-memory реализация для unit тестов.
+
+    Причина: не нужна БД — тесты изолированы и работают в микросекунды.
+    """
+
+    def __init__(self) -> None:
+        self._storage: dict[uuid.UUID, User] = {}
+
+    async def get_by_id(self, user_id: uuid.UUID) -> User | None:
+        return self._storage.get(user_id)
+
+    async def get_by_email(self, email: str) -> User | None:
+        return next(
+            (u for u in self._storage.values() if u.email == email),
+            None,
+        )
+
+    async def create(self, data: UserCreate) -> User:
+        if await self.get_by_email(data.email):
+            raise UserAlreadyExistsError(data.email)
+        user = User(
+            id=uuid.uuid4(),
+            email=data.email,
+            full_name=data.full_name,
+            hashed_password=data.hashed_password,
+            is_active=True,
+        )
+        self._storage[user.id] = user
+        return user
+
+    async def update(self, user: User) -> User:
+        if user.id not in self._storage:
+            raise UserNotFoundError(str(user.id))
+        self._storage[user.id] = user
+        return user
+
+    async def delete(self, user_id: uuid.UUID) -> None:
+        self._storage.pop(user_id, None)
+
+
+@pytest.fixture
+def user_repository() -> InMemoryUserRepository:
+    """Свежий in-memory репозиторий для каждого теста."""
+    return InMemoryUserRepository()
+
+
+@pytest.fixture
+def user_service(user_repository: InMemoryUserRepository) -> UserService:
+    """UserService с in-memory репозиторием."""
+    return UserService(user_repository)
+```
+
+### Unit тест use case
+```python
+# tests/unit/use_cases/test_user_service.py
+import pytest
+
+from app.domain.exceptions import UserAlreadyExistsError, UserNotFoundError
+from app.domain.use_cases.user_service import UserService
+
+
+async def test_create_user_returns_user_with_correct_email(
+    user_service: UserService,
+) -> None:
+    user = await user_service.create("john@example.com", "John Doe", "secret123")
+    assert user.email == "john@example.com"
+
+
+async def test_create_user_with_duplicate_email_raises_error(
+    user_service: UserService,
+) -> None:
+    await user_service.create("john@example.com", "John Doe", "secret123")
+
+    with pytest.raises(UserAlreadyExistsError):
+        await user_service.create("john@example.com", "Jane Doe", "other123")
+
+
+async def test_get_user_by_id_when_not_exists_raises_not_found(
+    user_service: UserService,
+) -> None:
+    import uuid
+    with pytest.raises(UserNotFoundError):
+        await user_service.get_by_id(uuid.uuid4())
+
+
+@pytest.mark.parametrize("email", [
+    "user@example.com",
+    "admin@company.org",
+    "test+tag@domain.io",
+])
+async def test_create_user_accepts_valid_email_formats(
+    user_service: UserService,
+    email: str,
+) -> None:
+    user = await user_service.create(email, "Test User", "password123")
+    assert user.email == email
+```
+
+## 4. Интеграционные тесты — реальная тестовая БД
+
+*Причина*: интеграционные тесты проверяют что репозиторий
+корректно работает с PostgreSQL. Используем отдельную тестовую БД
+с транзакцией, которая откатывается после каждого теста.
+```python
+# tests/conftest.py
+import pytest
+from collections.abc import AsyncGenerator
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
+
+from app.core.config import settings
+from app.data.db.base import Base
+
+
+@pytest.fixture(scope="session")
+def engine() -> AsyncEngine:
+    """Один engine на всю тестовую сессию.
+
+    Причина: создание engine дорогое — пул соединений.
+    Scope=session означает один раз на весь pytest запуск.
+    """
+    return create_async_engine(
+        settings.TEST_DATABASE_URL,  # отдельная БД: test_myapp
+        echo=False,
+    )
+
+
+@pytest.fixture(scope="session")
+async def create_tables(engine: AsyncEngine) -> AsyncGenerator[None, None]:
+    """Создать все таблицы перед сессией, удалить после."""
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    yield
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.drop_all)
+
+
+@pytest.fixture
+async def db_session(
+    engine: AsyncEngine,
+    create_tables: None,
+) -> AsyncGenerator[AsyncSession, None]:
+    """Изолированная сессия с автоматическим rollback после теста.
+
+    Причина: каждый тест работает в своей транзакции —
+    данные не засоряют друг друга, rollback быстрее DELETE.
+    """
+    async with engine.begin() as conn:
+        await conn.execute("SAVEPOINT test_savepoint")
+        session_factory = async_sessionmaker(
+            bind=conn,
+            expire_on_commit=False,
+            autoflush=False,
+        )
+        async with session_factory() as session:
+            yield session
+        await conn.execute("ROLLBACK TO SAVEPOINT test_savepoint")
+```
+```python
+# tests/integration/repositories/test_user_repository.py
+import uuid
+
+import pytest
+
+from app.data.repositories.user_repository import UserRepository
+from app.domain.entities.user import UserCreate
+from app.domain.exceptions import UserNotFoundError
+from sqlalchemy.ext.asyncio import AsyncSession
+
+
+@pytest.fixture
+def user_repository(db_session: AsyncSession) -> UserRepository:
+    return UserRepository(db_session)
+
+
+async def test_create_user_persists_to_database(
+    user_repository: UserRepository,
+) -> None:
+    data = UserCreate(
+        email="john@example.com",
+        full_name="John Doe",
+        hashed_password="hashed_secret",
+    )
+    user = await user_repository.create(data)
+
+    fetched = await user_repository.get_by_id(user.id)
+    assert fetched is not None
+    assert fetched.email == "john@example.com"
+
+
+async def test_get_by_id_when_not_exists_returns_none(
+    user_repository: UserRepository,
+) -> None:
+    result = await user_repository.get_by_id(uuid.uuid4())
+    assert result is None
+```
+
+## 5. API тесты — AsyncClient + dependency_overrides
+
+*Причина*: `httpx.AsyncClient` тестирует реальные HTTP запросы/ответы
+включая middleware, валидацию схем, статус коды.
+`dependency_overrides` подменяет только нужные зависимости —
+остальной граф DI работает как обычно.
+```python
+# tests/api/conftest.py
+import pytest
+from collections.abc import AsyncGenerator
+from httpx import ASGITransport, AsyncClient
+
+from app.api.deps import get_user_repository
+from app.main import create_app
+from tests.unit.conftest import InMemoryUserRepository
+
+
+@pytest.fixture
+def user_repository() -> InMemoryUserRepository:
+    return InMemoryUserRepository()
+
+
+@pytest.fixture
+async def async_client(
+    user_repository: InMemoryUserRepository,
+) -> AsyncGenerator[AsyncClient, None]:
+    """AsyncClient с подменённым репозиторием через dependency_overrides.
+
+    Причина: тесты API не зависят от БД — быстро и изолированно.
+    Для полных интеграционных тестов используй db_session фикстуру.
+    """
+    app = create_app()
+    app.dependency_overrides[get_user_repository] = lambda: user_repository
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        yield client
+
+    app.dependency_overrides.clear()
+```
+```python
+# tests/api/v1/test_users.py
+import pytest
+from httpx import AsyncClient
+
+
+async def test_create_user_returns_201(async_client: AsyncClient) -> None:
+    response = await async_client.post(
+        "/api/v1/users/",
+        json={
+            "email": "john@example.com",
+            "full_name": "John Doe",
+            "password": "secret123",
+        },
+    )
+    assert response.status_code == 201
+    assert response.json()["email"] == "john@example.com"
+
+
+async def test_create_user_with_duplicate_email_returns_409(
+    async_client: AsyncClient,
+) -> None:
+    payload = {
+        "email": "john@example.com",
+        "full_name": "John Doe",
+        "password": "secret123",
+    }
+    await async_client.post("/api/v1/users/", json=payload)
+
+    response = await async_client.post("/api/v1/users/", json=payload)
+    assert response.status_code == 409
+
+
+async def test_get_nonexistent_user_returns_404(
+    async_client: AsyncClient,
+) -> None:
+    import uuid
+    response = await async_client.get(f"/api/v1/users/{uuid.uuid4()}")
+    assert response.status_code == 404
+
+
+@pytest.mark.parametrize("missing_field,payload", [
+    ("email", {"full_name": "John", "password": "secret123"}),
+    ("password", {"email": "j@example.com", "full_name": "John"}),
+])
+async def test_create_user_with_missing_field_returns_422(
+    async_client: AsyncClient,
+    missing_field: str,
+    payload: dict,
+) -> None:
+    response = await async_client.post("/api/v1/users/", json=payload)
+    assert response.status_code == 422
+```
+
+## 6. Моки через pytest-mock
+
+*Причина*: `mocker.patch` из `pytest-mock` автоматически
+восстанавливает оригинал после теста. Лучше чем `unittest.mock.patch`
+как декоратор — фикстура чище и типизируется.
+
+✅ Правильно:
+```python
+from pytest_mock import MockerFixture
+
+async def test_create_user_hashes_password(
+    user_service: UserService,
+    mocker: MockerFixture,
+) -> None:
+    mock_hash = mocker.patch(
+        "app.core.security.hash_password",
+        return_value="hashed_value",
+    )
+    await user_service.create("test@example.com", "John", "plain_password")
+
+    mock_hash.assert_called_once_with("plain_password")
+```
+
+❌ Неправильно:
+```python
+# unittest.mock как декоратор — не дружит с async fixtures
+from unittest.mock import patch
+
+@patch("app.core.security.hash_password")  # декоратор на async тесте
+async def test_create_user(mock_hash, user_service):  # порядок аргументов путает
+    ...
+```
+
+## 7. Маркеры
+```python
+# pyproject.toml
+[tool.pytest.ini_options]
+markers = [
+    "unit: тесты без внешних зависимостей",
+    "integration: тесты с реальной БД",
+    "api: тесты HTTP слоя",
+    "slow: медленные тесты (>1s)",
+]
+```
+```python
+import pytest
+
+@pytest.mark.integration
+async def test_user_persisted_to_db(db_session): ...
+
+@pytest.mark.skip(reason="Feature not implemented yet: #123")
+async def test_oauth_login(): ...
+
+@pytest.mark.xfail(reason="Known bug: #456", strict=False)
+async def test_refresh_token_rotation(): ...
+```
+
+Запуск по маркерам:
+```bash
+uv run pytest -m unit              # только unit тесты — быстро в разработке
+uv run pytest -m "not slow"        # пропустить медленные
+uv run pytest -m integration       # только интеграционные — в CI
+uv run pytest --cov=app -v         # все тесты с coverage
+```
+
+# КРИТИЧЕСКИ ВАЖНО:
+- `asyncio_mode = "auto"` в pyproject.toml — все async тесты без `@pytest.mark.asyncio`
+- Unit тесты используют `InMemoryUserRepository` — никогда реальную БД
+- `dependency_overrides.clear()` после каждого теста — иначе утечка между тестами
+- Тестовая БД — отдельный инстанс, URL в `settings.TEST_DATABASE_URL`
+- Каждый тест — один `assert` на одно поведение
+
+# ВАЖНО:
+- `scope="session"` для engine, `scope="function"` для session — не наоборот
+- `yield` в фикстурах для teardown — не `try/finally` вручную
+- `autouse=True` только для глобальных патчей (structlog, sentry) — не для данных
+- Типизировать фикстуры и тесты — ruff ANN rules работают и в тестах при желании

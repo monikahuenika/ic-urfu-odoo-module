@@ -8,14 +8,18 @@ Models:
     - Semester: Study semester with assigned mandatory and elective subjects
     - IndividualPlan: Complete education plan with workflow and document generation
 """
+
+import base64
+from pathlib import Path
+import tempfile
+from typing import ClassVar
+
 from odoo import api, fields, models
 from odoo.exceptions import UserError, ValidationError
-import base64
-import os
-import tempfile
 
 # Import constants and document generator
 from .. import constants
+
 try:
     from ..doc_generator import create_urfu_plan
 except ImportError:
@@ -36,37 +40,47 @@ class Subject(models.Model):
         control: Assessment form (exam, credit, graded credit)
         subject_type: Type (mandatory or elective)
     """
-    _name = 'ic.urfu.subject'
-    _description = 'Subject/Course'
-    _order = 'name'
 
-    name = fields.Char('Наименование дисциплины', required=True)
+    _name = "ic.urfu.subject"
+    _description = "Subject/Course"
+    _order = "name"
+
+    name = fields.Char("Наименование дисциплины", required=True)
     hours = fields.Integer(
-        'Объем аудит. работы, час',
-        default=lambda self: int(self.env['ir.config_parameter'].sudo().get_param(
-            'ic_urfu.default_hours', constants.DEFAULT_HOURS
-        ))
+        "Объем аудит. работы, час",
+        default=lambda self: int(
+            self.env["ir.config_parameter"].sudo().get_param("ic_urfu.default_hours", constants.DEFAULT_HOURS)
+        ),
     )
     credits = fields.Integer(
-        'Объем (зет)',
-        default=lambda self: int(self.env['ir.config_parameter'].sudo().get_param(
-            'ic_urfu.default_credits', constants.DEFAULT_CREDITS
-        ))
+        "Объем (зет)",
+        default=lambda self: int(
+            self.env["ir.config_parameter"].sudo().get_param("ic_urfu.default_credits", constants.DEFAULT_CREDITS)
+        ),
     )
-    control = fields.Selection([
-        ('exam', 'Экзамен'),
-        ('credit', 'Зачет'),
-        ('credit_grade', 'Зачет с оценкой'),
-    ], string='Форма аттестации',
-       default=lambda self: self.env['ir.config_parameter'].sudo().get_param(
-           'ic_urfu.default_control_form', constants.DEFAULT_CONTROL_FORM
-       ))
-    subject_type = fields.Selection([
-        ('mandatory', 'Обязательная'),
-        ('elective', 'По выбору'),
-    ], string='Тип дисциплины', default='mandatory')
+    control = fields.Selection(
+        [
+            ("exam", "Экзамен"),
+            ("credit", "Зачет"),
+            ("credit_grade", "Зачет с оценкой"),
+        ],
+        string="Форма аттестации",
+        default=lambda self: (
+            self.env["ir.config_parameter"]
+            .sudo()
+            .get_param("ic_urfu.default_control_form", constants.DEFAULT_CONTROL_FORM)
+        ),
+    )
+    subject_type = fields.Selection(
+        [
+            ("mandatory", "Обязательная"),
+            ("elective", "По выбору"),
+        ],
+        string="Тип дисциплины",
+        default="mandatory",
+    )
 
-    @api.constrains('hours', 'credits')
+    @api.constrains("hours", "credits")
     def _check_positive_values(self):
         """Validate that hours and credits are positive.
 
@@ -81,8 +95,8 @@ class Subject(models.Model):
             if record.credits <= 0:
                 raise ValidationError("Объем (ЗЕТ) должен быть больше 0!")
 
-    _sql_constraints = [
-        ('name_unique', 'unique(name)', 'Дисциплина с таким названием уже существует!')
+    _sql_constraints: ClassVar[list[tuple[str, str, str]]] = [
+        ("name_unique", "unique(name)", "Дисциплина с таким названием уже существует!")
     ]
 
 
@@ -100,32 +114,35 @@ class Semester(models.Model):
         mandatory_subject_ids: Mandatory subjects for this semester
         elective_subject_ids: Elective subjects for this semester
     """
-    _name = 'ic.urfu.semester'
-    _description = 'Study Semester'
-    _order = 'number'
 
-    name = fields.Char('Название', compute='_compute_name', store=False)
-    number = fields.Integer('Номер семестра', required=True)
-    academic_year = fields.Char('Учебный год', required=True, default='2025 / 2026')
-    plan_id = fields.Many2one('ic.urfu.plan', string='Индивидуальный план', ondelete='cascade')
+    _name = "ic.urfu.semester"
+    _description = "Study Semester"
+    _order = "number"
+
+    name = fields.Char("Название", compute="_compute_name", store=False)
+    number = fields.Integer("Номер семестра", required=True)
+    academic_year = fields.Char("Учебный год", required=True, default="2025 / 2026")
+    plan_id = fields.Many2one("ic.urfu.plan", string="Индивидуальный план", ondelete="cascade")
 
     # Дисциплины
     mandatory_subject_ids = fields.Many2many(
-        'ic.urfu.subject',
-        'semester_mandatory_subject_rel',
-        'semester_id', 'subject_id',
-        string='Обязательные дисциплины',
-        domain=[('subject_type', '=', 'mandatory')]
+        "ic.urfu.subject",
+        "semester_mandatory_subject_rel",
+        "semester_id",
+        "subject_id",
+        string="Обязательные дисциплины",
+        domain=[("subject_type", "=", "mandatory")],
     )
     elective_subject_ids = fields.Many2many(
-        'ic.urfu.subject',
-        'semester_elective_subject_rel',
-        'semester_id', 'subject_id',
-        string='Дисциплины по выбору',
-        domain=[('subject_type', '=', 'elective')]
+        "ic.urfu.subject",
+        "semester_elective_subject_rel",
+        "semester_id",
+        "subject_id",
+        string="Дисциплины по выбору",
+        domain=[("subject_type", "=", "elective")],
     )
 
-    @api.constrains('number')
+    @api.constrains("number")
     def _check_semester_number(self):
         """Validate semester number is within valid range.
 
@@ -138,7 +155,7 @@ class Semester(models.Model):
             if record.number <= 0 or record.number > 8:
                 raise ValidationError("Номер семестра должен быть от 1 до 8!")
 
-    @api.constrains('plan_id', 'number')
+    @api.constrains("plan_id", "number")
     def _check_unique_semester_number(self):
         """Validate semester number is unique within the plan.
 
@@ -149,15 +166,13 @@ class Semester(models.Model):
         """
         for record in self:
             if record.plan_id:
-                duplicate = self.search([
-                    ('plan_id', '=', record.plan_id.id),
-                    ('number', '=', record.number),
-                    ('id', '!=', record.id)
-                ])
+                duplicate = self.search(
+                    [("plan_id", "=", record.plan_id.id), ("number", "=", record.number), ("id", "!=", record.id)]
+                )
                 if duplicate:
                     raise ValidationError(f"Семестр {record.number} уже существует в этом плане!")
 
-    @api.depends('number', 'academic_year')
+    @api.depends("number", "academic_year")
     def _compute_name(self):
         """Compute semester display name.
 
@@ -187,57 +202,67 @@ class IndividualPlan(models.Model):
         - Document generation in DOCX format following UrFU template
         - Notification system via Odoo messaging
     """
-    _name = 'ic.urfu.plan'
-    _description = 'Individual Education Plan'
-    _inherit = ['mail.thread', 'mail.activity.mixin']
-    _order = 'create_date desc'
+
+    _name = "ic.urfu.plan"
+    _description = "Individual Education Plan"
+    _inherit: ClassVar[list[str]] = ["mail.thread", "mail.activity.mixin"]
+    _order = "create_date desc"
 
     # Основная информация
-    name = fields.Char('Название', compute='_compute_name', store=True, tracking=True)
-    state = fields.Selection([
-        ('draft', 'Черновик'),
-        ('submitted', 'На проверке'),
-        ('approved', 'Одобрено'),
-        ('rejected', 'Отклонено'),
-        ('generated', 'Документ создан'),
-    ], string='Статус', default='draft', tracking=True)
+    name = fields.Char("Название", compute="_compute_name", store=True, tracking=True)
+    state = fields.Selection(
+        [
+            ("draft", "Черновик"),
+            ("submitted", "На проверке"),
+            ("approved", "Одобрено"),
+            ("rejected", "Отклонено"),
+            ("generated", "Документ создан"),
+        ],
+        string="Статус",
+        default="draft",
+        tracking=True,
+    )
 
     # Роли и ответственные
-    student_id = fields.Many2one('res.users', string='Студент', required=True,
-                                  default=lambda self: self.env.user,
-                                  tracking=True, readonly=True)
-    teacher_id = fields.Many2one('res.users', string='Преподаватель', tracking=True,
-                                  domain="[('groups_id', 'in', %(ic_urfu_module.group_ic_urfu_teacher)d)]")
-    teacher_comment = fields.Text('Комментарий преподавателя', tracking=True)
+    student_id = fields.Many2one(
+        "res.users", string="Студент", required=True, default=lambda self: self.env.user, tracking=True, readonly=True
+    )
+    teacher_id = fields.Many2one(
+        "res.users",
+        string="Преподаватель",
+        tracking=True,
+        domain="[('groups_id', 'in', %(ic_urfu_module.group_ic_urfu_teacher)d)]",
+    )
+    teacher_comment = fields.Text("Комментарий преподавателя", tracking=True)
 
     # Информация о студенте
-    student_name = fields.Char('ФИО студента (полное)', required=True, tracking=True)
-    student_short_name = fields.Char('ФИО студента (короткое)', compute='_compute_short_name', store=True)
+    student_name = fields.Char("ФИО студента (полное)", required=True, tracking=True)
+    student_short_name = fields.Char("ФИО студента (короткое)", compute="_compute_short_name", store=True)
 
     # Информация об обучении
-    institute = fields.Char('Институт', required=True)
-    department = fields.Char('Кафедра/Департамент', required=True)
-    specialty_code = fields.Char('Направление подготовки', required=True)
-    program = fields.Char('Образовательная программа', required=True)
+    institute = fields.Char("Институт", required=True)
+    department = fields.Char("Кафедра/Департамент", required=True)
+    specialty_code = fields.Char("Направление подготовки", required=True)
+    program = fields.Char("Образовательная программа", required=True)
 
     # Научная деятельность
-    supervisor = fields.Char('Научный руководитель')
-    research_area = fields.Text('Направление научно-исследовательской деятельности')
-    thesis_topic = fields.Text('Тема выпускной квалификационной работы')
-    deadline = fields.Char('Срок предоставления ВКР к защите', default='Май 2027')
+    supervisor = fields.Char("Научный руководитель")
+    research_area = fields.Text("Направление научно-исследовательской деятельности")
+    thesis_topic = fields.Text("Тема выпускной квалификационной работы")
+    deadline = fields.Char("Срок предоставления ВКР к защите", default="Май 2027")
 
     # Руководство
-    rop_name = fields.Char('Руководитель образовательной программы (РОП)', required=True)
-    year = fields.Char('Год', required=True, default='2025')
+    rop_name = fields.Char("Руководитель образовательной программы (РОП)", required=True)
+    year = fields.Char("Год", required=True, default="2025")
 
     # Семестры
-    semester_ids = fields.One2many('ic.urfu.semester', 'plan_id', string='Семестры')
+    semester_ids = fields.One2many("ic.urfu.semester", "plan_id", string="Семестры")
 
     # Генерация документа
-    document_file = fields.Binary('Сгенерированный документ', attachment=True)
-    document_filename = fields.Char('Имя файла')
+    document_file = fields.Binary("Сгенерированный документ", attachment=True)
+    document_filename = fields.Char("Имя файла")
 
-    @api.depends('student_name', 'program')
+    @api.depends("student_name", "program")
     def _compute_name(self):
         """Compute plan display name.
 
@@ -250,7 +275,7 @@ class IndividualPlan(models.Model):
             else:
                 record.name = "Новый план"
 
-    @api.depends('student_name')
+    @api.depends("student_name")
     def _compute_short_name(self):
         """Generate short name from full student name.
 
@@ -269,7 +294,7 @@ class IndividualPlan(models.Model):
                 else:
                     record.student_short_name = record.student_name
             else:
-                record.student_short_name = ''
+                record.student_short_name = ""
 
     def action_submit(self):
         """Submit plan for teacher review.
@@ -287,14 +312,14 @@ class IndividualPlan(models.Model):
         # Валидация перед отправкой
         if not self.semester_ids:
             return {
-                'type': 'ir.actions.client',
-                'tag': 'display_notification',
-                'params': {
-                    'title': 'Ошибка валидации',
-                    'message': 'Не добавлено ни одного семестра. Добавьте хотя бы один семестр перед отправкой.',
-                    'type': 'danger',
-                    'sticky': False,
-                }
+                "type": "ir.actions.client",
+                "tag": "display_notification",
+                "params": {
+                    "title": "Ошибка валидации",
+                    "message": "Не добавлено ни одного семестра. Добавьте хотя бы один семестр перед отправкой.",
+                    "type": "danger",
+                    "sticky": False,
+                },
             }
 
         has_disciplines = False
@@ -305,33 +330,33 @@ class IndividualPlan(models.Model):
 
         if not has_disciplines:
             return {
-                'type': 'ir.actions.client',
-                'tag': 'display_notification',
-                'params': {
-                    'title': 'Ошибка валидации',
-                    'message': 'Не добавлено ни одной дисциплины в семестры. Добавьте дисциплины перед отправкой.',
-                    'type': 'danger',
-                    'sticky': False,
-                }
+                "type": "ir.actions.client",
+                "tag": "display_notification",
+                "params": {
+                    "title": "Ошибка валидации",
+                    "message": "Не добавлено ни одной дисциплины в семестры. Добавьте дисциплины перед отправкой.",
+                    "type": "danger",
+                    "sticky": False,
+                },
             }
 
-        self.write({'state': 'submitted'})
+        self.write({"state": "submitted"})
         # Отправка уведомления преподавателю
         self.message_post(
             body=f"План отправлен на проверку студентом {self.student_id.name}",
             subject="План отправлен на проверку",
-            message_type='notification'
+            message_type="notification",
         )
 
         return {
-            'type': 'ir.actions.client',
-            'tag': 'display_notification',
-            'params': {
-                'title': 'Успешно',
-                'message': 'План отправлен на проверку',
-                'type': 'success',
-                'sticky': False,
-            }
+            "type": "ir.actions.client",
+            "tag": "display_notification",
+            "params": {
+                "title": "Успешно",
+                "message": "План отправлен на проверку",
+                "type": "success",
+                "sticky": False,
+            },
         }
 
     def action_approve(self):
@@ -342,16 +367,13 @@ class IndividualPlan(models.Model):
 
         Access: Teacher only
         """
-        self.write({
-            'state': 'approved',
-            'teacher_id': self.env.user.id
-        })
+        self.write({"state": "approved", "teacher_id": self.env.user.id})
         # Отправка уведомления студенту
         self.message_post(
             body=f"План одобрен преподавателем {self.env.user.name}",
             subject="План одобрен",
-            message_type='notification',
-            partner_ids=[self.student_id.partner_id.id]
+            message_type="notification",
+            partner_ids=[self.student_id.partner_id.id],
         )
 
     def action_reject(self):
@@ -362,22 +384,19 @@ class IndividualPlan(models.Model):
 
         Access: Teacher only
         """
-        self.write({
-            'state': 'rejected',
-            'teacher_id': self.env.user.id
-        })
+        self.write({"state": "rejected", "teacher_id": self.env.user.id})
         # Отправка уведомления студенту
-        comment = self.teacher_comment or 'Без комментариев'
+        comment = self.teacher_comment or "Без комментариев"
         self.message_post(
             body=f"План отклонен преподавателем {self.env.user.name}.<br/>Комментарий: {comment}",
             subject="План отклонен",
-            message_type='notification',
-            partner_ids=[self.student_id.partner_id.id]
+            message_type="notification",
+            partner_ids=[self.student_id.partner_id.id],
         )
 
     def action_draft(self):
         """Вернуть в черновик"""
-        self.write({'state': 'draft', 'teacher_comment': False})
+        self.write({"state": "draft", "teacher_comment": False})
 
     def unlink(self):
         """Override unlink to restrict deletion based on state.
@@ -389,12 +408,13 @@ class IndividualPlan(models.Model):
             UserError: If attempting to delete a plan that is not in draft or rejected state
         """
         for plan in self:
-            if plan.state not in ['draft', 'rejected']:
+            if plan.state not in ["draft", "rejected"]:
+                state_label = dict(plan._fields["state"].selection).get(plan.state, plan.state)
                 raise UserError(
-                    f"Невозможно удалить план '{plan.name}' в статусе '{dict(plan._fields['state'].selection).get(plan.state)}'.\n"
+                    f"Невозможно удалить план '{plan.name}' в статусе '{state_label}'.\n"
                     f"Удалять можно только черновики и отклонённые планы."
                 )
-        return super(IndividualPlan, self).unlink()
+        return super().unlink()
 
     def _validate_for_generation(self):
         """Validates plan has all required data for document generation.
@@ -408,9 +428,11 @@ class IndividualPlan(models.Model):
         if not self.semester_ids:
             errors.append("- Не добавлено ни одного семестра")
 
-        for semester in self.semester_ids:
-            if not semester.mandatory_subject_ids and not semester.elective_subject_ids:
-                errors.append(f"- Семестр {semester.number} не содержит дисциплин")
+        errors.extend(
+            f"- Семестр {semester.number} не содержит дисциплин"
+            for semester in self.semester_ids
+            if not semester.mandatory_subject_ids and not semester.elective_subject_ids
+        )
 
         if not self.student_name or not self.student_name.strip():
             errors.append("- ФИО студента не может быть пустым")
@@ -424,7 +446,7 @@ class IndividualPlan(models.Model):
         """Генерация документа DOCX"""
         self.ensure_one()
 
-        if self.state != 'approved':
+        if self.state != "approved":
             raise UserError("Документ можно генерировать только для одобренных планов!")
 
         # Валидация данных перед генерацией
@@ -439,38 +461,40 @@ class IndividualPlan(models.Model):
         data = self._prepare_document_data()
 
         # Генерация документа во временный файл
-        tmp_path = None
+        tmp_path: Path | None = None
         try:
-            with tempfile.NamedTemporaryFile(suffix='.docx', delete=False) as tmp_file:
-                tmp_path = tmp_file.name
+            with tempfile.NamedTemporaryFile(suffix=".docx", delete=False) as tmp_file:
+                tmp_path = Path(tmp_file.name)
 
             create_urfu_plan(data, tmp_path)
 
             # Чтение файла и сохранение в поле
-            with open(tmp_path, 'rb') as f:
+            with tmp_path.open("rb") as f:
                 document_data = f.read()
         except Exception as e:
-            raise UserError(f"Ошибка при генерации документа: {str(e)}")
+            raise UserError(f"Ошибка при генерации документа: {e!s}") from e
         finally:
             # Удаление временного файла
-            if tmp_path and os.path.exists(tmp_path):
-                os.unlink(tmp_path)
+            if tmp_path is not None and tmp_path.exists():
+                tmp_path.unlink()
 
         # Сохранение в запись
         filename = f"Individual_Plan_{self.student_short_name.replace(' ', '_')}.docx"
-        self.write({
-            'document_file': base64.b64encode(document_data),
-            'document_filename': filename,
-            'state': 'generated',
-        })
+        self.write(
+            {
+                "document_file": base64.b64encode(document_data),
+                "document_filename": filename,
+                "state": "generated",
+            }
+        )
 
         # Открываем форму для скачивания
         return {
-            'type': 'ir.actions.act_window',
-            'res_model': 'ic.urfu.plan',
-            'res_id': self.id,
-            'view_mode': 'form',
-            'target': 'current',
+            "type": "ir.actions.act_window",
+            "res_model": "ic.urfu.plan",
+            "res_id": self.id,
+            "view_mode": "form",
+            "target": "current",
         }
 
     def _prepare_document_data(self):
@@ -481,46 +505,48 @@ class IndividualPlan(models.Model):
         control_map = constants.CONTROL_FORM_MAPPING
 
         semesters_data = []
-        for semester in self.semester_ids.sorted('number'):
+        for semester in self.semester_ids.sorted("number"):
             mandatory_subjects = [
                 {
-                    'name': subj.name,
-                    'hours': subj.hours,
-                    'credits': subj.credits,
-                    'control': control_map.get(subj.control, subj.control),
+                    "name": subj.name,
+                    "hours": subj.hours,
+                    "credits": subj.credits,
+                    "control": control_map.get(subj.control, subj.control),
                 }
                 for subj in semester.mandatory_subject_ids
             ]
 
             elective_subjects = [
                 {
-                    'name': subj.name,
-                    'hours': subj.hours,
-                    'credits': subj.credits,
-                    'control': control_map.get(subj.control, subj.control),
+                    "name": subj.name,
+                    "hours": subj.hours,
+                    "credits": subj.credits,
+                    "control": control_map.get(subj.control, subj.control),
                 }
                 for subj in semester.elective_subject_ids
             ]
 
-            semesters_data.append({
-                'number': semester.number,
-                'academic_year': semester.academic_year,
-                'mandatory_subjects': mandatory_subjects,
-                'elective_subjects': elective_subjects,
-            })
+            semesters_data.append(
+                {
+                    "number": semester.number,
+                    "academic_year": semester.academic_year,
+                    "mandatory_subjects": mandatory_subjects,
+                    "elective_subjects": elective_subjects,
+                }
+            )
 
         return {
-            'student_name': self.student_name,
-            'student_short_name': self.student_short_name,
-            'rop_name': self.rop_name,
-            'year': self.year,
-            'institute': self.institute,
-            'department': self.department,
-            'specialty_code': self.specialty_code,
-            'program': self.program,
-            'supervisor': self.supervisor or '',
-            'research_area': self.research_area or '',
-            'thesis_topic': self.thesis_topic or '',
-            'deadline': self.deadline,
-            'semesters': semesters_data,
+            "student_name": self.student_name,
+            "student_short_name": self.student_short_name,
+            "rop_name": self.rop_name,
+            "year": self.year,
+            "institute": self.institute,
+            "department": self.department,
+            "specialty_code": self.specialty_code,
+            "program": self.program,
+            "supervisor": self.supervisor or "",
+            "research_area": self.research_area or "",
+            "thesis_topic": self.thesis_topic or "",
+            "deadline": self.deadline,
+            "semesters": semesters_data,
         }

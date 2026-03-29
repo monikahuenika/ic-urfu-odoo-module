@@ -9,6 +9,7 @@ __pycache__/
 venv/
 env/
 ENV/
+.venv/
 
 # IDEs
 .vscode/
@@ -32,3 +33,5 @@ local-env/odoo_data/
 # OS files
 .DS_Store
 Thumbs.db
+
+.ruff_cache/

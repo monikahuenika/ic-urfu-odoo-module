@@ -1,0 +1,678 @@
+---
+description: "API design правила: REST conventions, gRPC proto файлы и streaming, WebSocket паттерны, версионирование, обратная совместимость, выбор протокола. Применять при проектировании любых API эндпоинтов и сервисных контрактов."
+globs: ["app/api/**/*.py", "app/grpc/**/*.py", "proto/**/*.proto", "app/websocket/**/*.py"]
+alwaysApply: false
+priority: 110
+triggers: ["file_create", "agent_mode", "intent_search"]
+related_docs: [
+    "app/api/v1/routers/",
+    "proto/",
+    "app/core/config.py"
+]
+---
+
+# API Design Rules
+
+## Выбор протокола — когда что использовать
+
+*Причина*: выбор протокола — архитектурное решение, которое
+сложно изменить после. Неправильный выбор = переписывание клиентов.
+```
+Клиент — браузер, мобильное приложение, внешний партнёр?
+    → REST (JSON/HTTP) — универсально, легко дебажить, OpenAPI
+
+Сервис — сервис внутри инфраструктуры, низкая латентность?
+    → gRPC (Protobuf/HTTP2) — типизированный контракт, streaming, быстрее
+
+Нужен real-time push от сервера к клиенту?
+    → WebSocket — двусторонний канал, подходит для чата, live-обновлений
+
+Нужен real-time только сервер → клиент (события)?
+    → SSE (Server-Sent Events) — проще WebSocket, работает через HTTP
+```
+
+| Критерий        | REST                  | gRPC                   | WebSocket       |
+| --------------- | --------------------- | ---------------------- | --------------- |
+| Клиенты         | Любые                 | Только gRPC клиенты    | Браузер, мобайл |
+| Контракт        | OpenAPI (опционально) | `.proto` (обязательно) | Нет стандарта   |
+| Latency         | Средняя               | Низкая                 | Низкая          |
+| Streaming       | Нет                   | Да (4 режима)          | Да              |
+| Отладка         | Простая (curl)        | Сложнее (grpcurl)      | Сложная         |
+| Версионирование | URL `/v1/`            | `package v1` в proto   | Через события   |
+
+---
+
+## ЧАСТЬ 1 — REST API
+
+### 1.1 URL conventions — ресурсы, не действия
+
+*Причина*: REST — про ресурсы. HTTP метод выражает действие.
+Глаголы в URL — признак RPC-over-HTTP, не REST.
+
+✅ Правильно:
+```
+GET    /api/v1/users              # список пользователей
+GET    /api/v1/users/{id}         # конкретный пользователь
+POST   /api/v1/users              # создать пользователя
+PATCH  /api/v1/users/{id}         # частичное обновление
+PUT    /api/v1/users/{id}         # полная замена
+DELETE /api/v1/users/{id}         # удалить
+
+# Вложенные ресурсы — через родительский путь
+GET    /api/v1/users/{id}/orders  # заказы конкретного пользователя
+POST   /api/v1/users/{id}/orders  # создать заказ для пользователя
+
+# Действия над ресурсом — как sub-resource с глаголом
+POST   /api/v1/users/{id}/activate    # активировать пользователя
+POST   /api/v1/users/{id}/deactivate  # деактивировать
+POST   /api/v1/payments/{id}/refund   # вернуть платёж
+```
+
+❌ Неправильно:
+```
+POST /api/v1/createUser          # глагол в URL — ЗАПРЕЩЕНО
+GET  /api/v1/getUser?id=123      # действие вместо ресурса
+POST /api/v1/user/doActivate     # camelCase + глагол — двойное нарушение
+GET  /api/v1/Users               # PascalCase — ЗАПРЕЩЕНО, только kebab-case
+POST /api/v1/user-management/create-new-user  # ЗАПРЕЩЕНО
+```
+
+### 1.2 HTTP методы и статус коды
+
+*Причина*: правильные статус коды — это контракт с клиентом.
+Неправильный код ломает retry логику, кеширование, мониторинг.
+```python
+# app/api/v1/routers/users.py
+
+# 200 OK — успешный GET, PATCH, PUT
+@router.get("/{user_id}", response_model=UserResponse)          # → 200
+@router.patch("/{user_id}", response_model=UserResponse)        # → 200
+
+# 201 Created — успешный POST создающий ресурс
+@router.post("/", response_model=UserResponse,
+             status_code=status.HTTP_201_CREATED)               # → 201
+
+# 204 No Content — успешный DELETE или действие без тела ответа
+@router.delete("/{user_id}",
+               status_code=status.HTTP_204_NO_CONTENT)          # → 204
+
+# 4xx — клиентские ошибки
+# 400 Bad Request    — невалидные данные (Pydantic сделает автоматически)
+# 401 Unauthorized   — нет/неверный токен
+# 403 Forbidden      — токен валиден, но нет прав
+# 404 Not Found      — ресурс не существует
+# 409 Conflict       — конфликт состояния (дубль email)
+# 422 Unprocessable  — ошибка валидации (FastAPI автоматически)
+# 429 Too Many Reqs  — rate limiting
+
+# 5xx — серверные ошибки (не возвращать клиенту детали)
+# 500 Internal Error — непредвиденная ошибка
+# 503 Unavailable    — сервис недоступен (БД упала)
+```
+
+### 1.3 Структура ответов
+
+*Причина*: единообразная структура ответов позволяет клиентам
+написать универсальный обработчик один раз.
+
+✅ Правильно:
+```python
+# Успешный ответ — просто данные, без обёртки
+# GET /api/v1/users/123
+{
+    "id": "550e8400-e29b-41d4-a716-446655440000",
+    "email": "john@example.com",
+    "full_name": "John Doe",
+    "is_active": true,
+    "created_at": "2025-01-15T10:23:45Z"
+}
+
+# Список с пагинацией — всегда единый формат
+# GET /api/v1/users?page=1&size=20
+{
+    "items": [...],
+    "total": 150,
+    "page": 1,
+    "size": 20,
+    "pages": 8
+}
+
+# Ошибка — единый формат для всех 4xx/5xx
+{
+    "detail": "User '123' not found",
+    "code": "USER_NOT_FOUND",      # машиночитаемый код для клиента
+    "request_id": "abc-xyz-123"    # для корреляции с логами
+}
+```
+
+❌ Неправильно:
+```python
+# Разные форматы ошибок в разных эндпоинтах — ЗАПРЕЩЕНО
+{"error": "not found"}                     # один эндпоинт
+{"message": "User not found", "code": 404} # другой эндпоинт
+{"status": "error", "data": null}          # третий — хаос
+
+# Оборачивать успешный ответ в data: — ИЗБЕГАТЬ
+{"status": "success", "data": {"id": "..."}}  # лишняя вложенность
+```
+```python
+# app/api/v1/schemas/common.py
+from typing import Generic, TypeVar
+from pydantic import BaseModel
+
+T = TypeVar("T")
+
+
+class PaginatedResponse(BaseModel, Generic[T]):
+    """Единый формат пагинированных ответов."""
+    items: list[T]
+    total: int
+    page: int
+    size: int
+    pages: int
+
+
+class ErrorResponse(BaseModel):
+    """Единый формат ошибок."""
+    detail: str
+    code: str | None = None
+    request_id: str | None = None
+```
+
+### 1.4 Версионирование и обратная совместимость
+
+*Причина*: API — публичный контракт. Его нарушение ломает клиентов
+без предупреждения. Версионирование даёт время на миграцию.
+```
+# Версия в URL — наш стандарт
+/api/v1/users    # текущая стабильная версия
+/api/v2/users    # новая версия с breaking changes
+```
+
+**Что является breaking change (ЗАПРЕЩЕНО без новой версии):**
+```python
+# ❌ BREAKING — ломает существующих клиентов:
+# Удалить поле из response
+class UserResponse(BaseModel):
+    id: UUID
+    # email удалён — клиенты упадут с KeyError
+
+# Переименовать поле
+class UserResponse(BaseModel):
+    identifier: UUID  # было id — клиенты не найдут поле
+
+# Изменить тип поля
+class UserResponse(BaseModel):
+    id: str  # было UUID — сериализация изменится
+
+# Сделать опциональное поле обязательным в request
+class UserCreateRequest(BaseModel):
+    phone: str  # было Optional[str] — старые клиенты не передают
+
+# Удалить эндпоинт или изменить HTTP метод
+# DELETE /api/v1/users/{id} → POST /api/v1/users/{id}/delete
+```
+
+**Что НЕ является breaking change (безопасно в v1):**
+```python
+# ✅ NON-BREAKING — обратно совместимо:
+
+# Добавить новое опциональное поле в response
+class UserResponse(BaseModel):
+    id: UUID
+    email: EmailStr
+    avatar_url: str | None = None  # новое — старые клиенты игнорируют
+
+# Сделать обязательное поле request опциональным
+class UserCreateRequest(BaseModel):
+    phone: str | None = None  # было обязательным — старые клиенты продолжают слать
+
+# Добавить новый эндпоинт
+# POST /api/v1/users/{id}/avatar — новый, не трогает старые
+
+# Добавить новый query параметр с default
+@router.get("/")
+async def list_users(
+    include_inactive: bool = False,  # новый опциональный параметр
+) -> PaginatedResponse[UserResponse]: ...
+```
+
+**Стратегия миграции при breaking changes:**
+```
+1. Выпустить /api/v2/ с новым контрактом
+2. Оставить /api/v1/ работать параллельно (sunset period: минимум 6 месяцев)
+3. Добавить Deprecation header в v1 ответы
+4. Уведомить клиентов с датой отключения
+5. Отключить v1 только после даты
+```
+```python
+# Deprecation header в v1 роутерах
+from fastapi import Response
+
+@router.get("/{user_id}", response_model=UserResponse,
+            deprecated=True)  # помечает в OpenAPI как deprecated
+async def get_user_v1(user_id: UUID, response: Response) -> UserResponse:
+    response.headers["Deprecation"] = "true"
+    response.headers["Sunset"] = "Sat, 01 Jan 2026 00:00:00 GMT"
+    response.headers["Link"] = '</api/v2/users/{id}>; rel="successor-version"'
+    ...
+```
+
+---
+
+## ЧАСТЬ 2 — gRPC
+
+### 2.1 Когда выбирать gRPC
+```
+✅ gRPC уместен когда:
+- Сервис-сервис коммуникация внутри инфраструктуры
+- Нужна низкая латентность (Protobuf в 3-10x компактнее JSON)
+- Нужен streaming (unary не хватает)
+- Команды используют разные языки — proto как lingua franca
+- Строгий типизированный контракт критичен
+
+❌ gRPC не уместен когда:
+- Публичный API для браузерных клиентов (нет нативной поддержки)
+- Нужна простая отладка через curl/Postman
+- Команда не знакома с Protobuf
+```
+
+### 2.2 Proto файлы — структура и конвенции
+
+*Причина*: `.proto` файл — единственный источник правды для контракта.
+Версия пакета в proto — основа обратной совместимости.
+```protobuf
+// proto/user/v1/user_service.proto
+syntax = "proto3";
+
+// Версия в имени пакета — критично для обратной совместимости
+package user.v1;
+
+option python_out = "app/grpc/generated";
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/empty.proto";
+
+// Сервис — группирует связанные RPC методы
+service UserService {
+    // Unary RPC — один запрос, один ответ
+    rpc GetUser(GetUserRequest) returns (UserResponse);
+    rpc CreateUser(CreateUserRequest) returns (UserResponse);
+    rpc UpdateUser(UpdateUserRequest) returns (UserResponse);
+    rpc DeleteUser(DeleteUserRequest) returns (google.protobuf.Empty);
+
+    // Server streaming — один запрос, поток ответов
+    rpc ListUsers(ListUsersRequest) returns (stream UserResponse);
+
+    // Client streaming — поток запросов, один ответ
+    rpc BulkCreateUsers(stream CreateUserRequest) returns (BulkCreateResponse);
+
+    // Bidirectional streaming — поток запросов и поток ответов
+    rpc SyncUsers(stream UserSyncRequest) returns (stream UserSyncResponse);
+}
+
+message GetUserRequest {
+    string user_id = 1;  // UUID как string
+}
+
+message CreateUserRequest {
+    string email = 1;
+    string full_name = 2;
+    string password = 3;
+}
+
+message UpdateUserRequest {
+    string user_id = 1;
+    // optional — поле может отсутствовать (partial update)
+    optional string full_name = 2;
+    optional bool is_active = 3;
+}
+
+message DeleteUserRequest {
+    string user_id = 1;
+}
+
+message UserResponse {
+    string id = 1;
+    string email = 2;
+    string full_name = 3;
+    bool is_active = 4;
+    google.protobuf.Timestamp created_at = 5;
+}
+
+message ListUsersRequest {
+    int32 page = 1;
+    int32 size = 2;
+    bool include_inactive = 3;
+}
+
+message BulkCreateResponse {
+    int32 created_count = 1;
+    repeated string failed_emails = 2;
+}
+```
+
+### 2.3 gRPC Error codes — стандартные коды вместо HTTP статусов
+
+*Причина*: gRPC имеет свои 16 статус кодов. Маппинг на HTTP неоднозначен —
+используй gRPC коды напрямую для gRPC сервисов.
+```python
+# app/grpc/servicers/user_servicer.py
+import grpc
+from grpc import ServicerContext
+
+from app.domain.exceptions import UserNotFoundError, UserAlreadyExistsError
+from app.grpc.generated.user.v1 import user_service_pb2_grpc, user_service_pb2
+
+
+class UserServicer(user_service_pb2_grpc.UserServiceServicer):
+    """gRPC реализация UserService."""
+
+    def __init__(self, user_service: UserService) -> None:
+        self._service = user_service
+
+    async def GetUser(
+        self,
+        request: user_service_pb2.GetUserRequest,
+        context: ServicerContext,
+    ) -> user_service_pb2.UserResponse:
+        try:
+            user = await self._service.get_by_id(request.user_id)
+        except UserNotFoundError as e:
+            # NOT_FOUND — аналог HTTP 404
+            await context.abort(grpc.StatusCode.NOT_FOUND, str(e))
+
+        return self._to_proto(user)
+
+    async def CreateUser(
+        self,
+        request: user_service_pb2.CreateUserRequest,
+        context: ServicerContext,
+    ) -> user_service_pb2.UserResponse:
+        try:
+            user = await self._service.create(
+                request.email, request.full_name, request.password
+            )
+        except UserAlreadyExistsError as e:
+            # ALREADY_EXISTS — аналог HTTP 409
+            await context.abort(grpc.StatusCode.ALREADY_EXISTS, str(e))
+        except ValueError as e:
+            # INVALID_ARGUMENT — аналог HTTP 400
+            await context.abort(grpc.StatusCode.INVALID_ARGUMENT, str(e))
+
+        return self._to_proto(user)
+
+    async def ListUsers(
+        self,
+        request: user_service_pb2.ListUsersRequest,
+        context: ServicerContext,
+    ):
+        """Server streaming — отдаём пользователей по одному."""
+        async for user in self._service.iter_users(
+            page=request.page,
+            size=request.size,
+        ):
+            yield self._to_proto(user)
+
+    async def BulkCreateUsers(
+        self,
+        request_iterator,
+        context: ServicerContext,
+    ) -> user_service_pb2.BulkCreateResponse:
+        """Client streaming — принимаем поток запросов на создание."""
+        created = 0
+        failed = []
+
+        async for request in request_iterator:
+            try:
+                await self._service.create(
+                    request.email, request.full_name, request.password
+                )
+                created += 1
+            except UserAlreadyExistsError:
+                failed.append(request.email)
+
+        return user_service_pb2.BulkCreateResponse(
+            created_count=created,
+            failed_emails=failed,
+        )
+
+    @staticmethod
+    def _to_proto(user: User) -> user_service_pb2.UserResponse:
+        """Маппинг domain entity → proto message."""
+        from google.protobuf.timestamp_pb2 import Timestamp
+        ts = Timestamp()
+        ts.FromDatetime(user.created_at)
+        return user_service_pb2.UserResponse(
+            id=str(user.id),
+            email=user.email,
+            full_name=user.full_name,
+            is_active=user.is_active,
+            created_at=ts,
+        )
+```
+
+**Маппинг gRPC статус кодов:**
+```python
+# Справочник: domain exception → gRPC status code
+DOMAIN_TO_GRPC = {
+    UserNotFoundError:      grpc.StatusCode.NOT_FOUND,         # ресурс не найден
+    UserAlreadyExistsError: grpc.StatusCode.ALREADY_EXISTS,    # дубликат
+    PermissionDeniedError:  grpc.StatusCode.PERMISSION_DENIED, # нет прав
+    ValidationError:        grpc.StatusCode.INVALID_ARGUMENT,  # невалидные данные
+    UnauthenticatedError:   grpc.StatusCode.UNAUTHENTICATED,   # нет токена
+    RateLimitError:         grpc.StatusCode.RESOURCE_EXHAUSTED,# rate limit
+    TimeoutError:           grpc.StatusCode.DEADLINE_EXCEEDED, # таймаут
+}
+```
+
+### 2.4 Обратная совместимость в proto
+
+*Причина*: proto использует номера полей, не имена для сериализации.
+Нарушение совместимости = молчаливая порча данных у клиентов.
+```protobuf
+// ✅ NON-BREAKING — безопасно:
+message UserResponse {
+    string id = 1;
+    string email = 2;
+    string full_name = 3;
+    bool is_active = 4;
+    // Добавить новое поле с новым номером — безопасно
+    string avatar_url = 5;
+    google.protobuf.Timestamp updated_at = 6;
+}
+
+// ❌ BREAKING — ЗАПРЕЩЕНО без смены версии пакета:
+message UserResponse {
+    string id = 1;
+    // string email = 2; — УДАЛЕНО → номер 2 теперь "зарезервирован мусором"
+    string full_name = 3;
+    string user_email = 4;  // переиспользование номера 2 — КАТАСТРОФА
+}
+```
+```protobuf
+// Правильный способ удалить поле — reserved
+message UserResponse {
+    string id = 1;
+    reserved 2;               // номер зарезервирован — нельзя переиспользовать
+    reserved "email";         // имя зарезервировано
+    string full_name = 3;
+    bool is_active = 4;
+}
+```
+
+---
+
+## ЧАСТЬ 3 — WebSocket
+
+### 3.1 Когда выбирать WebSocket
+```
+✅ WebSocket уместен когда:
+- Real-time двусторонняя связь: чат, совместное редактирование
+- Частые обновления от сервера: live-цены, игровой стейт
+- Клиент должен отправлять события серверу без polling
+
+✅ SSE лучше WebSocket когда:
+- Только сервер → клиент (уведомления, progress bar, live logs)
+- Нужна простота (SSE работает через обычный HTTP)
+
+❌ WebSocket не нужен когда:
+- Достаточно polling раз в 5-30 секунд
+- Только запрос-ответ без push от сервера
+```
+
+### 3.2 Структура сообщений — типизированный envelope
+
+*Причина*: без envelope невозможно понять тип сообщения на клиенте.
+Единый формат позволяет написать универсальный диспетчер.
+```python
+# app/api/v1/schemas/websocket.py
+from typing import Any, Literal
+from pydantic import BaseModel
+
+
+class WSMessage(BaseModel):
+    """Envelope для всех WebSocket сообщений."""
+    type: str        # тип события: "chat.message", "user.typing", "error"
+    payload: Any     # данные события
+    request_id: str | None = None  # для корреляции запрос-ответ
+
+
+class WSErrorPayload(BaseModel):
+    code: str
+    detail: str
+
+
+# Конкретные типы событий
+class ChatMessagePayload(BaseModel):
+    room_id: str
+    text: str
+    sender_id: str
+
+
+class UserTypingPayload(BaseModel):
+    room_id: str
+    user_id: str
+    is_typing: bool
+```
+```python
+# app/api/v1/routers/ws.py
+import structlog
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends
+
+from app.api.deps import get_current_user_ws
+from app.api.v1.schemas.websocket import WSMessage, WSErrorPayload
+
+logger = structlog.get_logger(__name__)
+router = APIRouter(prefix="/ws", tags=["websocket"])
+
+
+@router.websocket("/chat/{room_id}")
+async def websocket_chat(
+    websocket: WebSocket,
+    room_id: str,
+    current_user=Depends(get_current_user_ws),
+) -> None:
+    """WebSocket эндпоинт для чата."""
+    await websocket.accept()
+    log = logger.bind(user_id=str(current_user.id), room_id=room_id)
+    log.info("ws.connected")
+
+    try:
+        while True:
+            raw = await websocket.receive_json()
+
+            # Валидация через Pydantic
+            try:
+                message = WSMessage.model_validate(raw)
+            except Exception as e:
+                await websocket.send_json(WSMessage(
+                    type="error",
+                    payload=WSErrorPayload(
+                        code="INVALID_MESSAGE",
+                        detail=str(e),
+                    ).model_dump(),
+                ).model_dump())
+                continue
+
+            # Диспетчер по типу события
+            match message.type:
+                case "chat.message":
+                    await handle_chat_message(websocket, message, current_user)
+                case "user.typing":
+                    await handle_typing(websocket, message, current_user)
+                case _:
+                    log.warning("ws.unknown_message_type", type=message.type)
+
+    except WebSocketDisconnect:
+        log.info("ws.disconnected")
+```
+
+### 3.3 Версионирование WebSocket
+```python
+# Версия через URL — как в REST
+@router.websocket("/v1/chat/{room_id}")   # текущая версия
+@router.websocket("/v2/chat/{room_id}")   # новая версия с другим протоколом
+
+# Версия через subprotocol header
+@router.websocket("/chat/{room_id}")
+async def websocket_chat(websocket: WebSocket) -> None:
+    # Клиент передаёт: Sec-WebSocket-Protocol: chat-v1
+    if "chat-v2" in websocket.headers.get("sec-websocket-protocol", ""):
+        await websocket.accept(subprotocol="chat-v2")
+    else:
+        await websocket.accept(subprotocol="chat-v1")
+```
+
+---
+
+## Общие правила для всех протоколов
+
+### Идемпотентность
+```
+GET    — всегда идемпотентен (не меняет состояние)
+PUT    — идемпотентен (повторный вызов = тот же результат)
+DELETE — идемпотентен (повторное удаление = 404, не ошибка)
+POST   — НЕ идемпотентен (повторный вызов = новый ресурс)
+PATCH  — НЕ идемпотентен по умолчанию
+
+# Для POST — идемпотентность через Idempotency-Key header
+POST /api/v1/payments
+Idempotency-Key: client-generated-uuid-123
+# Повторный запрос с тем же ключом → вернёт первый результат
+```
+
+### Документирование контракта
+```python
+# REST — OpenAPI через FastAPI декораторы
+@router.post(
+    "/",
+    response_model=UserResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Создать пользователя",
+    description="Регистрирует нового пользователя. Email должен быть уникальным.",
+    responses={
+        409: {"model": ErrorResponse, "description": "Email уже зарегистрирован"},
+        422: {"description": "Ошибка валидации входных данных"},
+    },
+)
+
+# gRPC — документация прямо в .proto комментариях
+// Создать нового пользователя.
+// Возвращает ALREADY_EXISTS если email занят.
+// Возвращает INVALID_ARGUMENT если email невалиден.
+rpc CreateUser(CreateUserRequest) returns (UserResponse);
+```
+
+# КРИТИЧЕСКИ ВАЖНО:
+- Breaking changes в REST → новая версия `/api/v2/` с sunset period ≥ 6 месяцев
+- В proto НИКОГДА не удалять и не переиспользовать номера полей — только `reserved`
+- Версия пакета в proto (`package user.v1`) — менять при breaking changes
+- WebSocket сообщения — всегда через типизированный envelope с полем `type`
+
+# ВАЖНО:
+- URL ресурсы в snake_case и множественном числе: `/api/v1/user_orders/`
+- Действия над ресурсом — sub-resource с глаголом: `POST /payments/{id}/refund`
+- Пагинация — единый формат `PaginatedResponse` для всех list эндпоинтов
+- gRPC для внутренних сервисов, REST для публичных/внешних API
+- Документировать breaking changes в CHANGELOG.md с датой отключения старой версии
