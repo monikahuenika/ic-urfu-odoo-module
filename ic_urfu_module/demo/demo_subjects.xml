@@ -1,0 +1,110 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <data noupdate="1">
+        <!-- Обязательные дисциплины -->
+        <record id="subject_mandatory_1" model="ic.urfu.subject">
+            <field name="name">Философские проблемы науки и техники</field>
+            <field name="hours">36</field>
+            <field name="credits">3</field>
+            <field name="control">exam</field>
+            <field name="subject_type">mandatory</field>
+        </record>
+
+        <record id="subject_mandatory_2" model="ic.urfu.subject">
+            <field name="name">Иностранный язык в профессиональной коммуникации</field>
+            <field name="hours">72</field>
+            <field name="credits">6</field>
+            <field name="control">credit_grade</field>
+            <field name="subject_type">mandatory</field>
+        </record>
+
+        <record id="subject_mandatory_3" model="ic.urfu.subject">
+            <field name="name">Методология научных исследований</field>
+            <field name="hours">36</field>
+            <field name="credits">3</field>
+            <field name="control">exam</field>
+            <field name="subject_type">mandatory</field>
+        </record>
+
+        <record id="subject_mandatory_4" model="ic.urfu.subject">
+            <field name="name">Современные технологии программирования</field>
+            <field name="hours">54</field>
+            <field name="credits">4</field>
+            <field name="control">exam</field>
+            <field name="subject_type">mandatory</field>
+        </record>
+
+        <record id="subject_mandatory_5" model="ic.urfu.subject">
+            <field name="name">Архитектура программных систем</field>
+            <field name="hours">54</field>
+            <field name="credits">4</field>
+            <field name="control">exam</field>
+            <field name="subject_type">mandatory</field>
+        </record>
+
+        <record id="subject_mandatory_6" model="ic.urfu.subject">
+            <field name="name">Управление проектами в IT</field>
+            <field name="hours">36</field>
+            <field name="credits">3</field>
+            <field name="control">credit_grade</field>
+            <field name="subject_type">mandatory</field>
+        </record>
+
+        <record id="subject_mandatory_7" model="ic.urfu.subject">
+            <field name="name">Научно-исследовательская работа</field>
+            <field name="hours">108</field>
+            <field name="credits">9</field>
+            <field name="control">credit_grade</field>
+            <field name="subject_type">mandatory</field>
+        </record>
+
+        <!-- Элективные дисциплины -->
+        <record id="subject_elective_1" model="ic.urfu.subject">
+            <field name="name">Машинное обучение</field>
+            <field name="hours">54</field>
+            <field name="credits">4</field>
+            <field name="control">exam</field>
+            <field name="subject_type">elective</field>
+        </record>
+
+        <record id="subject_elective_2" model="ic.urfu.subject">
+            <field name="name">Blockchain технологии</field>
+            <field name="hours">54</field>
+            <field name="credits">4</field>
+            <field name="control">exam</field>
+            <field name="subject_type">elective</field>
+        </record>
+
+        <record id="subject_elective_3" model="ic.urfu.subject">
+            <field name="name">Облачные вычисления</field>
+            <field name="hours">36</field>
+            <field name="credits">3</field>
+            <field name="control">credit</field>
+            <field name="subject_type">elective</field>
+        </record>
+
+        <record id="subject_elective_4" model="ic.urfu.subject">
+            <field name="name">Анализ больших данных</field>
+            <field name="hours">54</field>
+            <field name="credits">4</field>
+            <field name="control">exam</field>
+            <field name="subject_type">elective</field>
+        </record>
+
+        <record id="subject_elective_5" model="ic.urfu.subject">
+            <field name="name">Мобильная разработка</field>
+            <field name="hours">36</field>
+            <field name="credits">3</field>
+            <field name="control">credit_grade</field>
+            <field name="subject_type">elective</field>
+        </record>
+
+        <record id="subject_elective_6" model="ic.urfu.subject">
+            <field name="name">Компьютерное зрение</field>
+            <field name="hours">54</field>
+            <field name="credits">4</field>
+            <field name="control">exam</field>
+            <field name="subject_type">elective</field>
+        </record>
+    </data>
+</odoo>

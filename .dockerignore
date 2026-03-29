@@ -1,0 +1,49 @@
+# Git
+.git
+.gitignore
+.gitattributes
+
+# CI/CD
+.github
+
+# Documentation
+*.md
+!README.md
+DEPLOY.md
+CLAUDE.md
+
+# Python
+__pycache__
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+.venv
+venv/
+env/
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local development
+local-env/
+docker-compose.yml
+
+# Logs
+*.log
+
+# Temporary files
+tmp/
+temp/
+*.tmp
