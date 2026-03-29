@@ -1,0 +1,399 @@
+---
+description: "structlog паттерны: настройка процессоров, контекстные логи, bound logger, использование в каждом слое Clean Architecture. Применять при работе с любым .py файлом где есть логирование."
+globs: ["**/*.py", "app/core/logging.py"]
+alwaysApply: false
+priority: 103
+triggers: ["file_create", "file_change"]
+related_docs: [
+    "app/core/logging.py",
+    "app/core/config.py",
+    "app/main.py"
+]
+---
+
+# Logging Patterns — structlog
+
+## Почему structlog, не logging
+
+*Причина*: стандартный `logging` производит неструктурированные строки —
+их сложно парсить в Loki/Datadog/CloudWatch. structlog производит
+JSON с типизированными полями — каждое поле индексируется и фильтруется
+отдельно. Плюс — thread-local и async-safe контекст через `bind()`.
+
+✅ structlog (машиночитаемо):
+```json
+{"event": "user.created", "user_id": "abc-123", "email": "j@example.com",
+ "timestamp": "2025-01-15T10:23:45Z", "level": "info", "service": "myapp"}
+```
+
+❌ stdlib logging (нечитаемо машиной):
+```
+2025-01-15 10:23:45 INFO     User abc-123 created with email j@example.com
+```
+
+## 1. Настройка — core/logging.py
+
+*Причина*: вся конфигурация structlog в одном месте.
+`configure()` вызывается один раз при старте приложения в `lifespan`.
+В dev — читаемый цветной вывод, в prod — чистый JSON.
+
+*Важно*: с `PrintLoggerFactory` нельзя сочетать `structlog.stdlib.add_log_level` /
+`add_logger_name` — у `PrintLogger` нет `.name` / API stdlib `logging.Logger`.
+Используй процессоры из `structlog.processors` (как ниже) **или** переводи на
+`structlog.stdlib.LoggerFactory()` + `BoundLogger` из stdlib-интеграции.
+
+Реализация в репозитории: `app/core/logging.py`.
+```python
+# app/core/logging.py
+from __future__ import annotations
+
+import logging
+import sys
+
+import structlog
+import structlog.types
+
+from app.core.config import settings
+
+
+def _level_to_int(name: str) -> int:
+    """Map Settings log level name to int.
+
+    Avoid ``logging.getLevelName(str)``: on Python 3.11+ it does not return an int.
+    """
+    return logging.getLevelNamesMapping().get(name.upper(), logging.INFO)
+
+
+def _add_service(
+    _logger: object,
+    _method_name: str,
+    event_dict: dict[str, object],
+) -> dict[str, object]:
+    event_dict["service"] = settings.SERVICE_NAME
+    return event_dict
+
+
+def configure_logging() -> None:
+    """Configure structlog once at process startup (e.g. FastAPI lifespan).
+
+    Dev: colored ConsoleRenderer. Prod: JSON for log aggregators.
+
+    Uses ``PrintLoggerFactory``-compatible processors only — stdlib
+    ``add_logger_name`` / ``add_log_level`` require ``LoggerFactory``, not PrintLogger.
+    """
+    min_level = _level_to_int(settings.LOG_LEVEL)
+
+    shared_processors: list[structlog.types.Processor] = [
+        structlog.contextvars.merge_contextvars,
+        structlog.processors.add_log_level,
+        structlog.processors.StackInfoRenderer(),
+        structlog.processors.TimeStamper(fmt="iso", utc=True),
+        _add_service,
+        structlog.processors.format_exc_info,
+        structlog.processors.UnicodeDecoder(),
+    ]
+
+    renderer: structlog.types.Processor = (
+        structlog.processors.JSONRenderer()
+        if settings.ENVIRONMENT == "production"
+        else structlog.dev.ConsoleRenderer(colors=True)
+    )
+
+    structlog.configure(
+        processors=[
+            *shared_processors,
+            renderer,
+        ],
+        wrapper_class=structlog.make_filtering_bound_logger(min_level),
+        context_class=dict,
+        logger_factory=structlog.PrintLoggerFactory(file=sys.stdout),
+        cache_logger_on_first_use=True,
+    )
+
+    logging.basicConfig(
+        format="%(message)s",
+        stream=sys.stdout,
+        level=min_level,
+    )
+    for name in ("uvicorn", "uvicorn.error", "uvicorn.access", "sqlalchemy.engine"):
+        lg = logging.getLogger(name)
+        lg.handlers.clear()
+        lg.propagate = True
+```
+
+Подключение в `main.py`:
+```python
+# app/main.py
+from contextlib import asynccontextmanager
+
+import structlog
+from app.core.config import settings
+from app.core.logging import configure_logging
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+    configure_logging()                          # первым делом
+    logger = structlog.get_logger(__name__)
+    logger.info("app.startup", environment=settings.ENVIRONMENT)
+    yield
+    await engine.dispose()
+    logger.info("app.shutdown")
+```
+
+## 2. Получение логгера
+
+*Причина*: `structlog.get_logger(__name__)` — на уровне модуля,
+один раз. Не создавать логгер внутри функций — лишний overhead.
+
+✅ Правильно:
+```python
+# Один раз на уровне модуля
+import structlog
+
+logger = structlog.get_logger(__name__)
+
+
+async def create_user(data: UserCreate) -> User:
+    user = await repository.create(data)
+    logger.info("user.created", user_id=str(user.id), email=user.email)
+    return user
+```
+
+❌ Неправильно:
+```python
+async def create_user(data: UserCreate) -> User:
+    logger = structlog.get_logger()   # создаём каждый раз — лишний overhead
+    import logging                    # stdlib в бизнес коде — ЗАПРЕЩЕНО
+    logging.info(f"Creating user {data.email}")  # f-строка — G004 violation
+    print(f"User created: {data.email}")          # T201 violation
+```
+
+## 3. Формат событий — dot.notation
+
+*Причина*: `object.action` нотация создаёт иерархию событий,
+которую легко фильтровать в любой системе логирования:
+`{event: "user.*"}` найдёт все события пользователя.
+```python
+# Паттерн: <объект>.<действие> для событий
+logger.info("user.created", user_id=str(user.id))
+logger.info("user.updated", user_id=str(user.id))
+logger.info("user.deleted", user_id=str(user.id))
+logger.info("user.login.success", user_id=str(user.id))
+logger.info("user.login.failed", email=email, reason="invalid_password")
+
+logger.info("db.query.executed", table="users", duration_ms=12.4)
+logger.warning("db.pool.exhausted", pool_size=10, waiting=3)
+
+logger.info("http.request", method="POST", path="/api/v1/users", status=201)
+logger.error("http.request.failed", method="GET", path="/api/v1/users/123", status=404)
+
+logger.info("auth.token.created", user_id=str(user.id), expires_in=3600)
+logger.warning("auth.token.expired", user_id=str(user.id))
+logger.warning("auth.token.invalid", reason="signature_mismatch")
+```
+
+## 4. Контекстные переменные — request-scoped context
+
+*Причина*: `structlog.contextvars` позволяет привязать поля
+(request_id, user_id) один раз в middleware — и они автоматически
+появятся во всех последующих логах этого запроса без передачи через параметры.
+```python
+# app/api/middleware.py
+import uuid
+import structlog
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
+
+class LoggingMiddleware(BaseHTTPMiddleware):
+    """Добавляет request_id и базовый контекст в каждый лог запроса."""
+
+    async def dispatch(self, request: Request, call_next):
+        request_id = str(uuid.uuid4())
+
+        # Привязать контекст — появится во ВСЕХ логах этого запроса
+        structlog.contextvars.clear_contextvars()
+        structlog.contextvars.bind_contextvars(
+            request_id=request_id,
+            method=request.method,
+            path=request.url.path,
+        )
+
+        logger = structlog.get_logger(__name__)
+        logger.info("http.request.started")
+
+        response = await call_next(request)
+
+        logger.info(
+            "http.request.completed",
+            status_code=response.status_code,
+        )
+        return response
+```
+
+Регистрация в `create_app()`:
+```python
+# app/main.py
+from app.api.middleware import LoggingMiddleware
+
+def create_app() -> FastAPI:
+    app = FastAPI(...)
+    app.add_middleware(LoggingMiddleware)   # до CORSMiddleware
+    ...
+```
+
+Результат — все логи одного запроса имеют общий `request_id`:
+```json
+{"event": "http.request.started",    "request_id": "abc-123", "method": "POST", "path": "/api/v1/users"}
+{"event": "user.created",            "request_id": "abc-123", "user_id": "xyz-456"}
+{"event": "http.request.completed",  "request_id": "abc-123", "status_code": 201}
+```
+
+## 5. Bound logger — переиспользуемый контекст
+
+*Причина*: `logger.bind()` создаёт новый логгер с постоянными полями.
+Удобно в классах — привязать `user_id` один раз в `__init__`,
+не передавать в каждый метод.
+```python
+# app/domain/use_cases/user_service.py
+import structlog
+
+logger = structlog.get_logger(__name__)
+
+
+class UserService:
+    def __init__(self, repository: AbstractUserRepository) -> None:
+        self._repository = repository
+
+    async def create(self, email: str, full_name: str, password: str) -> User:
+        # Контекст создания — bind на время метода
+        log = logger.bind(email=email)
+        log.info("user.create.started")
+
+        if await self._repository.get_by_email(email):
+            log.warning("user.create.failed", reason="email_already_exists")
+            raise UserAlreadyExistsError(email)
+
+        hashed = hash_password(password)
+        user = await self._repository.create(
+            UserCreate(email=email, full_name=full_name, hashed_password=hashed)
+        )
+        # Новый bind с user_id после создания
+        log.bind(user_id=str(user.id)).info("user.create.completed")
+        return user
+
+    async def delete(self, user_id: uuid.UUID) -> None:
+        log = logger.bind(user_id=str(user_id))
+        log.info("user.delete.started")
+
+        await self._repository.delete(user_id)
+        log.info("user.delete.completed")
+```
+
+## 6. Логирование исключений
+
+*Причина*: `logger.exception()` автоматически включает
+стектрейс через `exc_info=True`. Использовать в `except` блоках —
+не `logger.error()` без стектрейса.
+
+✅ Правильно:
+```python
+async def get_by_id(self, user_id: uuid.UUID) -> User:
+    try:
+        return await self._repository.get_by_id(user_id)
+    except DatabaseConnectionError as e:
+        # exception() = error() + стектрейс автоматически
+        logger.exception(
+            "db.query.failed",
+            user_id=str(user_id),
+            table="users",
+        )
+        raise
+```
+
+❌ Неправильно:
+```python
+try:
+    return await self._repository.get_by_id(user_id)
+except Exception as e:
+    logger.error(f"Failed to get user: {e}")   # G004 — f-строка в логе
+    logger.error("db.query.failed", error=str(e))  # нет стектрейса
+    raise
+```
+
+## 7. Уровни логирования — когда что использовать
+```python
+# DEBUG — детали для отладки, только в dev
+logger.debug("db.query.built", sql=str(stmt), params=params)
+logger.debug("cache.hit", key=cache_key, ttl_remaining=120)
+
+# INFO — нормальный поток событий системы
+logger.info("user.created", user_id=str(user.id))
+logger.info("payment.processed", amount=99.99, currency="USD")
+logger.info("email.sent", recipient=email, template="welcome")
+
+# WARNING — нештатная ситуация, система продолжает работу
+logger.warning("auth.token.expired", user_id=str(user.id))
+logger.warning("rate_limit.approached", requests=95, limit=100)
+logger.warning("db.pool.high_utilization", used=8, total=10)
+
+# ERROR — ошибка, операция не выполнена, требует внимания
+logger.error("payment.failed", order_id=str(order.id), reason="insufficient_funds")
+logger.exception("db.query.failed", table="users")  # с стектрейсом
+
+# CRITICAL — система неработоспособна, нужен немедленный алёрт
+logger.critical("db.connection.lost", database=settings.DATABASE_URL)
+logger.critical("secret_key.missing", config_key="SECRET_KEY")
+```
+
+## 8. Что НЕ логировать
+
+# КРИТИЧЕСКИ ВАЖНО — нарушение = утечка чувствительных данных:
+```python
+# НИКОГДА не логировать:
+logger.info("user.login", password=user.password)          # пароль — ЗАПРЕЩЕНО
+logger.info("auth.token", token=access_token)              # JWT токен — ЗАПРЕЩЕНО
+logger.info("payment", card_number=card.number)            # PCI DSS — ЗАПРЕЩЕНО
+logger.info("user.data", ssn=user.ssn)                     # персональные данные
+logger.debug("db.query", params={"password": hashed_pwd})  # хеш пароля — ЗАПРЕЩЕНО
+
+# Правильно — логировать только идентификаторы
+logger.info("user.login.success", user_id=str(user.id))
+logger.info("auth.token.issued", user_id=str(user.id), expires_in=3600)
+logger.info("payment.initiated", order_id=str(order.id), amount=amount)
+```
+
+## 9. Настройки в core/config.py
+```python
+# app/core/config.py
+from typing import Literal
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+
+    ENVIRONMENT: Literal["development", "staging", "production"] = "development"
+    LOG_LEVEL: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
+    SERVICE_NAME: str = "ic-urfu"
+    ...
+```
+```bash
+# .env
+ENVIRONMENT=production
+LOG_LEVEL=INFO
+```
+
+# КРИТИЧЕСКИ ВАЖНО:
+- `configure_logging()` вызывается ОДИН РАЗ в `lifespan` — не в каждом модуле
+- Уровень лога из строки (`LOG_LEVEL`) переводить в `int` через `logging.getLevelNamesMapping()` (или аналог), **не** через `logging.getLevelName(settings.LOG_LEVEL)` — в Python 3.11+ это ломает уровень
+- Никогда не логировать пароли, токены, карточные данные, PII
+- `logger.exception()` в `except` блоках — не `logger.error()` без стектрейса
+- `print()` в любом коде — T20 violation, ЗАПРЕЩЕНО
+
+# ВАЖНО:
+- Событие в формате `object.action` — не произвольные строки
+- `structlog.get_logger(__name__)` на уровне модуля — не внутри функций
+- `logger.bind()` для контекста класса/операции — не передавать через параметры
+- `structlog.contextvars.bind_contextvars()` в middleware — request_id на весь запрос
+- В тестах: `structlog.configure(processors=[structlog.dev.ConsoleRenderer()])`

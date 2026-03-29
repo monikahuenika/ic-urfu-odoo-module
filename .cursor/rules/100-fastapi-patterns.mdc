@@ -1,0 +1,249 @@
+---
+description: "Общий контекст проекта: стек, инструменты, Odoo-модульная архитектура с Clean-слоями
+              (presentation/domain/data), LLM-агенты через MCP, соглашения команды.
+              Применяется всегда для любого запроса."
+globs: ["**/*"]
+alwaysApply: true
+priority: 1
+triggers: ["agent_mode", "file_create", "file_change"]
+---
+
+# Project Overview — ИУП: Индивидуальный Учебный План (Odoo + LLM)
+
+## Назначение сервиса
+
+Веб-сервис на базе **Odoo**, который помогает студентам собрать
+индивидуальный учебный план (ИУП) без стресса, путаницы и бесконечных
+согласований. LLM-агенты через **MCP-коннекторы** автоматически проверяют
+корректность плана, предупреждают о перегрузке и готовят план к согласованию.
+
+Критерии готовности:
+- студент собирает ИУП за несколько минут
+- система автоматически предупреждает об ошибках и перегрузке
+- интерфейс быстрый и понятный без долгого обучения
+- большинство планов проходит согласование без исправлений
+
+---
+
+## Стек технологий
+
+| Слой              | Технология                                         |
+| ----------------- | -------------------------------------------------- |
+| ERP платформа     | Odoo 17 Community / Enterprise                     |
+| Runtime           | Python 3.12+                                       |
+| ORM / миграции    | Odoo ORM (встроенный), `_auto = True` / XML данные |
+| БД                | PostgreSQL 15+ (управляется Odoo)                  |
+| LLM-агенты        | MCP-коннекторы (Model Context Protocol)            |
+| LLM провайдер     | OpenAI / Anthropic (через MCP server)              |
+| Фронтенд          | Odoo OWL (native) + QWeb templates                 |
+| API               | Odoo JSON-RPC + кастомные `/web/dataset/call_kw`   |
+| Внешний HTTP API  | FastAPI (опционально — для MCP bridge сервера)     |
+| Менеджер зависим. | uv (только для MCP bridge, не для Odoo аддонов)    |
+| Линтер/форматтер  | Ruff (для Python кода вне Odoo аддонов)            |
+| Логирование       | Odoo `_logger` (structlog — только в MCP bridge)   |
+| Тесты             | pytest + `odoo.tests.common` (TransactionCase)     |
+
+---
+
+## Архитектура: Odoo-модульная с Clean-слоями
+
+Проект реализован как набор **Odoo аддонов**. Внутри каждого аддона
+соблюдается разделение на слои. Зависимости направлены ТОЛЬКО внутрь:
+`controllers → services ← models`. Отдельный MCP bridge — изолированный
+FastAPI микросервис.
+```
+odoo_addons/
+│
+├── iup_core/                        # ЯДРО — базовые модели и бизнес-логика
+│   ├── models/                      # DATA LAYER — Odoo ORM модели
+│   │   ├── iup_plan.py              # class IupPlan(models.Model)
+│   │   ├── iup_course.py            # class IupCourse(models.Model)
+│   │   ├── iup_constraint.py        # class IupConstraint(models.Model)
+│   │   └── iup_approval.py          # class IupApproval(models.Model)
+│   │
+│   ├── services/                    # DOMAIN LAYER — бизнес-логика (чистый Python)
+│   │   ├── plan_validator.py        # class PlanValidatorService
+│   │   ├── workload_checker.py      # class WorkloadCheckerService
+│   │   ├── approval_workflow.py     # class ApprovalWorkflowService
+│   │   └── interfaces/              # ABC порты для внешних зависимостей
+│   │       └── llm_agent.py         # class AbstractLLMAgent(ABC)
+│   │
+│   ├── controllers/                 # PRESENTATION LAYER — HTTP endpoints
+│   │   └── iup_api.py               # class IupApiController(http.Controller)
+│   │
+│   ├── wizard/                      # Odoo wizards (transient UI flows)
+│   │   └── iup_submit_wizard.py
+│   │
+│   ├── views/                       # QWeb XML views + OWL компоненты
+│   │   ├── iup_plan_views.xml
+│   │   └── iup_dashboard_views.xml
+│   │
+│   ├── security/
+│   │   ├── ir.model.access.csv      # ACL права доступа
+│   │   └── iup_security.xml         # record rules
+│   │
+│   ├── data/
+│   │   └── iup_constraint_data.xml  # Начальные данные ограничений
+│   │
+│   ├── static/
+│   │   └── src/
+│   │       ├── js/                  # OWL компоненты конструктора ИУП
+│   │       │   ├── iup_builder.js   # Главный OWL компонент
+│   │       │   └── course_card.js   # Карточка дисциплины
+│   │       └── xml/                 # QWeb шаблоны для OWL
+│   │           └── iup_builder.xml
+│   │
+│   ├── __manifest__.py
+│   └── __init__.py
+│
+├── iup_llm/                         # LLM ИНТЕГРАЦИЯ — MCP клиент внутри Odoo
+│   ├── models/
+│   │   └── iup_llm_request.py       # class IupLlmRequest(models.Model) — лог запросов
+│   ├── services/
+│   │   ├── mcp_client.py            # Реализация AbstractLLMAgent через MCP
+│   │   └── prompt_builder.py        # class PromptBuilderService
+│   ├── __manifest__.py
+│   └── __init__.py
+│
+├── iup_approval/                    # СОГЛАСОВАНИЕ — workflow аппрувов
+│   ├── models/
+│   │   └── iup_approval_stage.py    # class IupApprovalStage(models.Model)
+│   ├── services/
+│   │   └── auto_checker.py          # Pre-approval автоматическая проверка
+│   ├── views/
+│   │   └── approval_views.xml
+│   ├── __manifest__.py
+│   └── __init__.py
+│
+└── iup_portal/                      # СТУДЕНЧЕСКИЙ ПОРТАЛ — публичный интерфейс
+    ├── controllers/
+    │   └── portal.py                # class IupPortalController(CustomerPortal)
+    ├── views/
+    │   └── portal_templates.xml     # QWeb для /my/iup
+    ├── __manifest__.py
+    └── __init__.py
+
+mcp_bridge/                          # ОТДЕЛЬНЫЙ МИКРОСЕРВИС — MCP ↔ LLM
+├── app/
+│   ├── main.py                      # FastAPI app factory
+│   ├── routers/
+│   │   └── agent.py                 # POST /agent/validate, /agent/suggest
+│   ├── agents/
+│   │   ├── plan_agent.py            # LLM агент валидации плана
+│   │   └── suggestion_agent.py      # LLM агент рекомендаций курсов
+│   ├── mcp/
+│   │   ├── server.py                # MCP Server (SSE/stdio)
+│   │   └── tools/                   # MCP Tools, доступные агенту
+│   │       ├── get_courses.py       # tool: получить список курсов из Odoo
+│   │       ├── validate_plan.py     # tool: проверить ограничения плана
+│   │       └── check_workload.py    # tool: проверить нагрузку по семестрам
+│   └── core/
+│       ├── config.py                # Pydantic Settings
+│       └── logging.py               # structlog setup
+├── pyproject.toml
+└── .env.example
+```
+
+---
+
+## Правила зависимостей между слоями
+
+# КРИТИЧЕСКИ ВАЖНО — нарушение = сломанная архитектура:
+
+✅ Правильное направление зависимостей (внутри Odoo аддона):
+```python
+# iup_core/controllers/iup_api.py — controller знает о service
+from odoo.addons.iup_core.services.plan_validator import PlanValidatorService
+
+# iup_core/services/plan_validator.py — service работает с моделями через self.env
+# НЕ импортирует модели напрямую — только через Odoo ORM registry
+plan = self.env['iup.plan'].browse(plan_id)
+
+# iup_llm/services/mcp_client.py — реализует интерфейс из iup_core
+from odoo.addons.iup_core.services.interfaces.llm_agent import AbstractLLMAgent
+```
+
+❌ Запрещённые паттерны:
+```python
+# services/ — НИКОГДА не импортирует из controllers/
+from odoo.addons.iup_core.controllers.iup_api import IupApiController  # ЗАПРЕЩЕНО
+
+# Прямой SQL в сервисах — НИКОГДА
+self.env.cr.execute("SELECT * FROM iup_plan")  # ЗАПРЕЩЕНО без крайней нужды
+
+# Бизнес-логика в контроллерах — НИКОГДА
+class IupApiController(http.Controller):
+    def validate(self):
+        if credits > 30:  # ЗАПРЕЩЕНО — логика принадлежит PlanValidatorService
+            ...
+
+# iup_approval не импортирует из iup_portal — аддоны зависят только вниз
+from odoo.addons.iup_portal.controllers.portal import ...  # ЗАПРЕЩЕНО
+```
+
+---
+
+## Поток данных (student request lifecycle)
+```
+Студент в браузере (OWL конструктор ИУП)
+    ↓
+iup_portal/controllers/portal.py         # HTTP, авторизация через Odoo session
+    ↓
+iup_core/controllers/iup_api.py          # JSON-RPC endpoint, валидация входных данных
+    ↓
+iup_core/services/plan_validator.py      # бизнес-логика: проверка ограничений, кредитов
+    ↓
+iup_core/services/interfaces/llm_agent.py  # вызов через абстракцию (ABC)
+    ↓
+iup_llm/services/mcp_client.py           # HTTP запрос к mcp_bridge
+    ↓
+mcp_bridge/agents/plan_agent.py          # LLM агент с доступом к MCP tools
+    ↓
+mcp_bridge/mcp/tools/validate_plan.py    # MCP tool: обращается обратно к Odoo ORM
+    ↓
+iup_core/models/iup_plan.py              # PostgreSQL через Odoo ORM
+    ↓
+Результат (ошибки / предупреждения) поднимается вверх
+    ↓
+iup_core/controllers/iup_api.py          # сериализация ответа
+    ↓
+OWL компонент показывает предупреждения студенту в реальном времени
+```
+
+---
+
+## Соглашения по именованию
+
+| Объект                     | Слой / место            | Пример                           |
+| -------------------------- | ----------------------- | -------------------------------- |
+| `IupPlan`                  | models/ (Odoo ORM)      | `_name = 'iup.plan'`             |
+| `PlanValidatorService`     | services/ (domain)      | Чистый Python класс              |
+| `AbstractLLMAgent`         | services/interfaces/    | ABC порт для LLM                 |
+| `McpClient`                | iup_llm/services/       | Конкретная реализация            |
+| `IupApiController`         | controllers/            | `@http.route('/api/iup/...')`    |
+| `IupPortalController`      | iup_portal/controllers/ | Наследует `CustomerPortal`       |
+| `IupPlanSchema` (Pydantic) | mcp_bridge/             | Только в MCP bridge микросервисе |
+| `PlanAgent`                | mcp_bridge/agents/      | LLM агент (LangChain / прямой)   |
+
+---
+
+## Критические соглашения
+
+# КРИТИЧЕСКИ ВАЖНО:
+- Никогда не используй `pip install` — `uv add` для mcp_bridge, аддоны через `odoo` зависимости в `__manifest__.py`
+- Никогда не запускай `black`, `isort`, `flake8` — только `uv run ruff` (для mcp_bridge)
+- Odoo модели всегда наследуют `models.Model` / `models.TransientModel` / `models.AbstractModel`
+- Все поля модели объявляются как `fields.*` — никаких raw SQL колонок
+- Бизнес-логика живёт ТОЛЬКО в `services/` — не в моделях, не в контроллерах
+- Конфигурация mcp_bridge — только через Pydantic Settings из `core/config.py` + `.env`
+- Секреты (API ключи LLM) — никогда в коде, только через `.env` + Odoo `ir.config_parameter`
+- MCP bridge — отдельный процесс, общается с Odoo через Odoo XML-RPC / JSON-RPC
+- LLM агенты НИКОГДА не обращаются к БД напрямую — только через MCP tools → Odoo API
+
+# ВАЖНО:
+- Версионирование Odoo API роутов: `/api/v1/iup/`
+- Права доступа: студент видит только свои планы (`res.users` → `iup.plan` через record rules)
+- Согласование реализуется через Odoo `mail.thread` + кастомные `stage_id` поля
+- Все публичные страницы студента — через `website` модуль Odoo или `portal` (`/my/iup`)
+- Маппинг Odoo record → Python dict для MCP bridge происходит ТОЛЬКО в `services/`, не в контроллерах
+- Логирование в аддонах: `_logger = logging.getLogger(__name__)` (стандартный Odoo способ)

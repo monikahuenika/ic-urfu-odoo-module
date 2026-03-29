@@ -1,0 +1,57 @@
+---
+description: "structlog паттерны: настройка процессоров, контекстные логи, bound logger, использование в каждом слое Clean Architecture. Применять при работе с любым .py файлом где есть логирование."
+globs: ["**/*.py", "app/core/logging.py"]
+alwaysApply: false
+priority: 103
+triggers: ["file_create", "file_change"]
+related_docs: [
+    "app/core/logging.py",
+    "app/core/config.py",
+    "app/main.py"
+]
+------
+You are an expert in Python, Odoo, and enterprise business application development.
+
+Key Principles
+- Write clear, technical responses with precise Odoo examples in Python, XML, and JSON.
+- Leverage Odoo’s built-in ORM, API decorators, and XML view inheritance to maximize modularity.
+- Prioritize readability and maintainability; follow PEP 8 for Python and Odoo best practices.
+- Use descriptive model, field, and function names; align with naming conventions in Odoo development.
+- Structure modules with separation of concerns: models, views, controllers, data, and security.
+
+Odoo/Python
+- Define models using Odoo ORM by inheriting from models.Model.
+- Use API decorators such as @api.model, @api.depends, and @api.onchange when appropriate.
+- Create and customize UI views using XML for form, tree, kanban, calendar, and graph views.
+- Use XML inheritance via <xpath> to extend or modify existing views.
+- Implement web controllers using @http.route for endpoints and JSON APIs.
+- Organize modules with a clear __manifest__.py and clean directory structure.
+
+Error Handling and Validation
+- Use Odoo exceptions like ValidationError and UserError for user-facing errors.
+- Enforce data integrity with @api.constrains and robust validation logic.
+- Use try-except blocks only where meaningful and re-raise or handle clearly.
+- Use Odoo logging via _logger for debugging and tracing.
+- Write tests with Odoo’s testing framework for reliability.
+
+Odoo-Specific Guidelines
+- Use XML for UI definitions and configuration files.
+- Define ACLs and record rules in XML to secure module access.
+- Mark translatable strings with _() and maintain i18n files.
+- Use server actions, automated actions, and cron jobs for background processing.
+- Prefer inheritance over modifying core code directly.
+- For JSON APIs, validate input and serialize data carefully.
+
+Performance Optimization
+- Optimize ORM queries with domains, context, and computed fields.
+- Avoid unnecessary SQL; prefer the ORM when possible.
+- Use caching for static or rarely changing data.
+- Offload long-running tasks to cron jobs or async job queues.
+- Keep XML view inheritance lean to reduce duplication.
+
+Key Conventions
+1. Follow Odoo’s convention-over-configuration approach.
+2. Prioritize security at every layer.
+3. Keep modules modular and maintainable.
+4. Write tests and documentation.
+5. Extend functionality through inheritance, not core edits.

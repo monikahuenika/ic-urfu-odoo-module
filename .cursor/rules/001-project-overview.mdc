@@ -1,0 +1,144 @@
+---
+description: "Общий контекст проекта: стек, инструменты, 3-слойная Clean Architecture (presentation/domain/data), соглашения команды. Применяется всегда для любого запроса."
+globs: ["**/*"]
+alwaysApply: true
+priority: 1
+triggers: ["agent_mode", "file_create", "file_change"]
+---
+
+# Project Overview
+
+## Стек технологий
+
+- **Runtime**: Python 3.12+
+- **Framework**: FastAPI
+- **Менеджер зависимостей**: uv (не pip, не poetry)
+- **БД**: PostgreSQL + SQLAlchemy (async) + Alembic (миграции)
+- **Линтер + форматтер**: Ruff (конфиг в ruff.toml)
+- **Логирование**: structlog
+- **Тесты**: pytest + pytest-asyncio
+
+## Архитектура: 3-слойная Clean Architecture
+
+Проект строго разделён на три слоя. Зависимости направлены
+ТОЛЬКО внутрь: presentation → domain ← data.
+Data слой НИКОГДА не импортирует из presentation.
+Domain слой НИКОГДА не импортирует из presentation или data.
+```
+app/
+├── domain/                        # DOMAIN LAYER — ядро, без внешних зависимостей
+│   ├── entities/                  # Чистые dataclass / Pydantic без ORM
+│   │   └── user.py                # @dataclass User, UserCreate, UserUpdate
+│   ├── interfaces/                # Абстрактные порты (ABC репозитории)
+│   │   └── user_repository.py     # class AbstractUserRepository(ABC)
+│   ├── use_cases/                 # Бизнес-логика (сервисы)
+│   │   └── user_service.py        # class UserService
+│   └── exceptions.py              # Кастомные доменные ошибки
+│
+├── data/                          # DATA LAYER — реализации, SQLAlchemy, Alembic
+│   ├── models/                    # SQLAlchemy ORM модели
+│   │   └── user.py                # class UserORM(Base)
+│   ├── repositories/              # Конкретные реализации interfaces/
+│   │   └── user_repository.py     # class UserRepository(AbstractUserRepository)
+│   ├── db/
+│   │   ├── base.py                # Base declarative model
+│   │   └── session.py             # Async engine + session factory
+│   └── migrations/                # Alembic миграции
+│
+├── api/                           # PRESENTATION LAYER — HTTP, FastAPI
+│   ├── v1/
+│   │   ├── routers/               # Роутеры по доменам
+│   │   │   └── users.py
+│   │   └── schemas/               # Pydantic request/response схемы
+│   │       └── user.py            # UserRequest, UserResponse
+│   └── deps.py                    # FastAPI Depends: DI, сессии, auth
+│
+├── core/                          # Инфраструктурный клей (не слой)
+│   ├── config.py                  # Pydantic Settings
+│   ├── security.py                # Auth утилиты
+│   └── logging.py                 # structlog setup
+│
+└── main.py                        # FastAPI app factory
+```
+
+## Правила зависимостей между слоями
+
+# КРИТИЧЕСКИ ВАЖНО — нарушение = сломанная архитектура:
+
+✅ Правильное направление зависимостей:
+```python
+# api/v1/routers/users.py — presentation знает о domain
+from app.domain.use_cases.user_service import UserService
+from app.domain.exceptions import UserNotFoundError
+
+# data/repositories/user_repository.py — data реализует domain interface
+from app.domain.interfaces.user_repository import AbstractUserRepository
+from app.domain.entities.user import User
+```
+
+❌ Запрещённые импорты — domain изолирован:
+```python
+# domain/use_cases/user_service.py — НИКОГДА
+from app.data.models.user import UserORM        # domain → data ЗАПРЕЩЕНО
+from app.api.v1.schemas.user import UserRequest  # domain → presentation ЗАПРЕЩЕНО
+from sqlalchemy.ext.asyncio import AsyncSession  # ORM в domain ЗАПРЕЩЕНО
+```
+
+❌ Запрещённые импорты — data не знает о presentation:
+```python
+# data/repositories/user_repository.py — НИКОГДА
+from app.api.v1.schemas.user import UserRequest  # data → presentation ЗАПРЕЩЕНО
+```
+
+## Потоки данных (request lifecycle)
+```
+HTTP Request
+    ↓
+api/v1/routers/users.py        # принять запрос, валидация через Pydantic schema
+    ↓
+api/deps.py                    # DI: получить сессию, создать репозиторий, сервис
+    ↓
+domain/use_cases/user_service.py   # бизнес-логика, работа с entities
+    ↓
+domain/interfaces/user_repository.py  # вызов через абстракцию
+    ↓
+data/repositories/user_repository.py  # SQL через SQLAlchemy
+    ↓
+data/models/user.py            # ORM → domain entity маппинг
+    ↓
+domain/entities/user.py        # чистый объект обратно вверх
+    ↓
+api/v1/schemas/user.py         # entity → response schema
+    ↓
+HTTP Response
+```
+
+## Соглашения по именованию слоёв
+
+| Объект                         | Слой              | Пример                |
+| ------------------------------ | ----------------- | --------------------- |
+| `UserORM`                      | data/models       | SQLAlchemy модель     |
+| `User`                         | domain/entities   | Чистый dataclass      |
+| `UserRequest` / `UserResponse` | api/schemas       | Pydantic для HTTP     |
+| `AbstractUserRepository`       | domain/interfaces | ABC порт              |
+| `UserRepository`               | data/repositories | Конкретная реализация |
+| `UserService`                  | domain/use_cases  | Бизнес-логика         |
+| `UserNotFoundError`            | domain/exceptions | Доменная ошибка       |
+
+## Критические соглашения
+
+# КРИТИЧЕСКИ ВАЖНО:
+- Никогда не используй `pip install` — только `uv add`
+- Никогда не запускай `black`, `isort`, `flake8` — только `uv run ruff`
+- Все DB операции — только async (asyncpg драйвер)
+- Конфигурация — только через Pydantic Settings из `core/config.py`
+- Секреты — никогда в коде, только через .env + Settings
+- Domain entities — чистые dataclass или Pydantic BaseModel, НИКАКОГО SQLAlchemy
+- ORM модели живут ТОЛЬКО в data/models/, никогда не покидают data слой
+
+# ВАЖНО:
+- Версионирование API через префикс /api/v1/
+- Бизнес-логика живёт ТОЛЬКО в domain/use_cases/
+- Роутеры только принимают запрос → вызывают use case → возвращают response schema
+- DI (dependency injection) строится через api/deps.py
+- Маппинг ORM → Entity происходит в data/repositories/, не в роутерах
