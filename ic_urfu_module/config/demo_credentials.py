@@ -2,7 +2,7 @@
 Demo Credentials Configuration
 ===============================
 
-🔐 ЕДИНСТВЕННОЕ МЕСТО ГДЕ НУЖНО МЕНЯТЬ ЛОГИНЫ И ПАРОЛИ!
+ЕДИНСТВЕННОЕ МЕСТО ГДЕ НУЖНО МЕНЯТЬ ЛОГИНЫ И ПАРОЛИ!
 
 Все скрипты и demo данные берут учетные данные отсюда.
 Измени значения здесь и запусти: make clean && make init
@@ -13,7 +13,7 @@ Demo Credentials Configuration
 # УЧЕТНЫЕ ДАННЫЕ СТУДЕНТА
 # ============================================
 STUDENT_LOGIN = "student"
-STUDENT_PASSWORD = "student"
+STUDENT_PASSWORD = "student"  # noqa: S105
 STUDENT_EMAIL = "student@example.com"
 STUDENT_NAME = "Иванов Петр Сергеевич"
 
@@ -21,7 +21,7 @@ STUDENT_NAME = "Иванов Петр Сергеевич"
 # УЧЕТНЫЕ ДАННЫЕ ПРЕПОДАВАТЕЛЯ
 # ============================================
 TEACHER_LOGIN = "teacher"
-TEACHER_PASSWORD = "teacher"
+TEACHER_PASSWORD = "teacher"  # noqa: S105
 TEACHER_EMAIL = "teacher@example.com"
 TEACHER_NAME = "Смирнова Анна Викторовна"
 

@@ -1,4 +1,3 @@
+from . import ic_urfu, ic_urfu_config
 
-from . import ic_urfu
-from . import ic_urfu_config
-
+__all__ = ["ic_urfu", "ic_urfu_config"]

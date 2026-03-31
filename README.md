@@ -58,10 +58,10 @@ Open your browser and navigate to:
 
 After initialization, you can login with these accounts:
 
-| Role    | Login    | Password | Email                  |
-|---------|----------|----------|------------------------|
-| Student | student  | student  | student@example.com    |
-| Teacher | teacher  | teacher  | teacher@example.com    |
+| Role    | Login   | Password | Email               |
+| ------- | ------- | -------- | ------------------- |
+| Student | student | student  | student@example.com |
+| Teacher | teacher | teacher  | teacher@example.com |
 
 **Want to change passwords?** See [docs/CREDENTIALS.md](docs/CREDENTIALS.md) for instructions.
 

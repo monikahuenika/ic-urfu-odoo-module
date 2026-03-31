@@ -1,4 +1,4 @@
-.PHONY: help init bootstrap start stop restart logs clean status shell db-shell test-generator update-credentials fix-passwords
+.PHONY: help init bootstrap start stop restart logs clean status shell db-shell db-status upgrade-module test-generator update-credentials fix-passwords lint lint-fix lint-fmt
 
 # Default target
 help:
@@ -15,9 +15,14 @@ help:
 	@echo "  make status             - Check containers status"
 	@echo "  make shell              - Open shell in Odoo container"
 	@echo "  make db-shell           - Open PostgreSQL shell"
+	@echo "  make db-status          - SQL snapshot: init state, module, demo users"
 	@echo "  make test-generator     - Test document generator standalone"
+	@echo "  make lint               - Run ruff linter (uv run ruff check)"
+	@echo "  make lint-fix           - Run ruff with auto-fix (uv run ruff check --fix)"
+	@echo "  make lint-fmt           - Run ruff formatter (uv run ruff format)"
 	@echo "  make update-credentials - Regenerate demo_users.xml from credentials config"
-	@echo "  make fix-passwords      - Fix user passwords if login fails"
+	@echo "  make fix-passwords      - Create demo users + set passwords if missing"
+	@echo "  make upgrade-module     - odoo -u ic_urfu_module (load new data/*.xml)"
 	@echo "  make clean              - Remove all data (containers, volumes, DB)"
 	@echo ""
 	@echo "🔐 To change passwords: edit ic_urfu_module/config/demo_credentials.py"
@@ -57,6 +62,13 @@ update-credentials:
 # Fix passwords if login fails
 fix-passwords:
 	@./scripts/fix_passwords.sh
+
+# Apply module code/XML changes (e.g. new data/demo_users.xml) to existing DB
+upgrade-module:
+	@echo "Upgrading ic_urfu_module..."
+	@docker exec odoo_app odoo -c /etc/odoo/odoo.conf -d odoo -u ic_urfu_module --stop-after-init
+	@cd local-env && docker compose restart odoo
+	@echo "✓ Done. Open http://localhost:8069"
 
 # Start containers
 start:
@@ -109,11 +121,25 @@ db-shell:
 	@echo "Opening PostgreSQL shell..."
 	@docker exec -it odoo_db psql -U odoo -d odoo
 
+# Read-only: DB initialized?, ic_urfu_module state, res_users logins
+db-status:
+	@chmod +x scripts/db_status.sh 2>/dev/null; ./scripts/db_status.sh
+
 # Test document generator standalone
 test-generator:
 	@echo "Testing document generator..."
 	@cd ic_urfu_module/doc_generator && python3 doc_generator.py
 	@echo "✓ Document generated! Check ic_urfu_module/doc_generator/ for output."
+
+# Ruff (requires uv + ruff in project env)
+lint:
+	uv run ruff check .
+
+lint-fix:
+	uv run ruff check --fix .
+
+lint-fmt:
+	uv run ruff format .
 
 # Clean everything (WARNING: deletes all data!)
 clean:

@@ -4,15 +4,13 @@ Script to generate demo_users.xml from credentials configuration.
 Run this after changing credentials in ic_urfu_module/config/demo_credentials.py
 """
 
-import sys
-import os
 import importlib.util
+from pathlib import Path
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent
 
 # Load credentials module directly without importing the whole package
-creds_path = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    'ic_urfu_module', 'config', 'demo_credentials.py'
-)
+creds_path = _REPO_ROOT / "ic_urfu_module" / "config" / "demo_credentials.py"
 
 spec = importlib.util.spec_from_file_location("demo_credentials", creds_path)
 creds = importlib.util.module_from_spec(spec)
@@ -21,7 +19,8 @@ spec.loader.exec_module(creds)
 # Generate XML content
 xml_content = f"""<?xml version="1.0" encoding="utf-8"?>
 <odoo>
-    <data noupdate="0">
+    <!-- Regular data: user records (see __manifest__.py). -->
+    <data noupdate="1">
         <!-- Демо пользователь: Студент -->
         <record id="user_demo_student" model="res.users">
             <field name="name">{creds.STUDENT_NAME}</field>
@@ -46,15 +45,10 @@ xml_content = f"""<?xml version="1.0" encoding="utf-8"?>
 """
 
 # Write to file
-output_file = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    'ic_urfu_module', 'demo', 'demo_users.xml'
-)
-
-with open(output_file, 'w', encoding='utf-8') as f:
-    f.write(xml_content)
+output_file = _REPO_ROOT / "ic_urfu_module" / "data" / "demo_users.xml"
+output_file.write_text(xml_content, encoding="utf-8")
 
 print(f"✓ Generated {output_file}")
-print(f"\nCredentials used:")
+print("\nCredentials used:")
 print(f"  Student: {creds.STUDENT_LOGIN} / {creds.STUDENT_PASSWORD}")
 print(f"  Teacher: {creds.TEACHER_LOGIN} / {creds.TEACHER_PASSWORD}")

@@ -62,25 +62,30 @@ DB_EXISTS=$(docker exec odoo_db psql -U odoo -lqt | cut -d \| -f 1 | grep -w odo
 if [ "$DB_EXISTS" -eq "0" ]; then
     echo "Creating database and installing module (this may take 2-3 minutes)..."
 
-    # Initialize database with demo data
-    docker exec odoo_app odoo -c /etc/odoo/odoo.conf -d odoo --init=ic_urfu_module --stop-after-init --without-demo=False
+    # Initialize database with demo data (-i = install module and dependencies)
+    docker exec odoo_app odoo -c /etc/odoo/odoo.conf -d odoo -i ic_urfu_module --stop-after-init --without-demo=False
 
-    echo " ✓ Database created and module installed with demo data!"
+    echo " ✓ Database created and install step finished."
 else
     echo "Database already exists. Checking module status..."
 
-    # Check if module is installed
-    MODULE_INSTALLED=$(docker exec odoo_db psql -U odoo -d odoo -tAc "SELECT state FROM ir_module_module WHERE name='ic_urfu_module'" 2>/dev/null || echo "")
+    MODULE_INSTALLED=$(docker exec odoo_db psql -U odoo -d odoo -tAc "SELECT state FROM ir_module_module WHERE name='ic_urfu_module'" 2>/dev/null | tr -d '[:space:]' || echo "")
 
     if [ "$MODULE_INSTALLED" = "installed" ]; then
         echo " ✓ Module already installed!"
-    elif [ "$MODULE_INSTALLED" = "uninstalled" ] || [ -z "$MODULE_INSTALLED" ]; then
-        echo "Installing module..."
-        docker exec odoo_app odoo -c /etc/odoo/odoo.conf -d odoo --init=ic_urfu_module --stop-after-init --without-demo=False
-        echo " ✓ Module installed with demo data!"
     else
-        echo " ✓ Module is in state: $MODULE_INSTALLED"
+        echo "Installing ic_urfu_module (previous state: ${MODULE_INSTALLED:-no row})..."
+        docker exec odoo_app odoo -c /etc/odoo/odoo.conf -d odoo -i ic_urfu_module --stop-after-init --without-demo=False
+        echo " ✓ Install step finished."
     fi
+fi
+
+MODULE_STATE=$(docker exec odoo_db psql -U odoo -d odoo -tAc "SELECT state FROM ir_module_module WHERE name='ic_urfu_module'" 2>/dev/null | tr -d '[:space:]' || echo "")
+if [ -z "$MODULE_STATE" ] || [ "$MODULE_STATE" != "installed" ]; then
+    echo -e "${RED}ERROR: ic_urfu_module is not installed (ir_module_module.state='${MODULE_STATE:-missing}').${NC}"
+    echo "  Check Odoo output above and: docker logs odoo_app"
+    echo "  Then run: ${YELLOW}make clean && make init${NC}  or install from Apps (enable Developer Mode → Update Apps List → search IC UrFU)."
+    exit 1
 fi
 
 # Restart Odoo to ensure clean state
@@ -130,20 +135,13 @@ echo "==========================================${NC}"
 echo ""
 echo -e "${BLUE}Access Odoo at:${NC} http://localhost:8069"
 echo ""
-echo -e "${BLUE}Login credentials:${NC}"
-echo "  ┌─────────────────────────────────────┐"
-echo "  │ Student Account                     │"
-echo "  │  Login:    student                  │"
-echo "  │  Password: student                  │"
-echo "  │  Email:    student@example.com      │"
-echo "  └─────────────────────────────────────┘"
+echo -e "${BLUE}Login: use res.users.login (student / teacher), not email:${NC}"
+echo "  ┌────────────────────────────────────────────────────────┐"
+echo "  │ Student — login: student    password: student          │"
+echo "  │ Teacher — login: teacher    password: teacher          │"
+echo "  └────────────────────────────────────────────────────────┘"
 echo ""
-echo "  ┌─────────────────────────────────────┐"
-echo "  │ Teacher Account                     │"
-echo "  │  Login:    teacher                  │"
-echo "  │  Password: teacher                  │"
-echo "  │  Email:    teacher@example.com      │"
-echo "  └─────────────────────────────────────┘"
+echo -e "${BLUE}Apps:${NC} technical name is ${YELLOW}ic_urfu_module${NC}; display name ${YELLOW}IC UrFU Module${NC}."
 echo ""
 echo -e "${BLUE}Demo data loaded:${NC}"
 echo "  ✓ 7 mandatory subjects"
