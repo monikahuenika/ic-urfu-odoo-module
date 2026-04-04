@@ -275,10 +275,10 @@
                         <field name="student_short_name" readonly="1" class="text-muted"/>
                     </div>
 
-                    <!-- Комментарий преподавателя -->
-                    <div class="alert alert-warning" invisible="not teacher_comment or state not in ['rejected']">
-                        <strong>Комментарий преподавателя:</strong>
-                        <p><field name="teacher_comment" readonly="1" nolabel="1"/></p>
+                    <!-- Комментарий проверяющего при возврате на доработку -->
+                    <div class="alert alert-warning" invisible="not rejection_comment or state != 'rejected'">
+                        <strong>Комментарий проверяющего:</strong>
+                        <field name="rejection_comment" widget="html" readonly="1" nolabel="1"/>
                     </div>
 
                     <group>

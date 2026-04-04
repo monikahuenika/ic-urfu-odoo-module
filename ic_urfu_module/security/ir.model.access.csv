@@ -12,3 +12,4 @@ access_ic_urfu_program_template_system,ic.urfu.program.template system,model_ic_
 access_ic_urfu_semester_template_student,ic.urfu.semester.template student,model_ic_urfu_semester_template,group_ic_urfu_student,1,0,0,0
 access_ic_urfu_semester_template_teacher,ic.urfu.semester.template teacher,model_ic_urfu_semester_template,group_ic_urfu_teacher,1,1,1,1
 access_ic_urfu_semester_template_system,ic.urfu.semester.template system,model_ic_urfu_semester_template,base.group_system,1,1,1,1
+access_ic_urfu_reject_wizard_teacher,ic.urfu.reject.wizard teacher,model_ic_urfu_reject_wizard,group_ic_urfu_teacher,1,1,1,1

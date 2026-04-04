@@ -234,6 +234,12 @@ class IndividualPlan(models.Model):
         domain="[('groups_id', 'in', %(ic_urfu_module.group_ic_urfu_teacher)d)]",
     )
     teacher_comment = fields.Text("Комментарий преподавателя", tracking=True)
+    rejection_comment = fields.Text(
+        "Комментарий проверяющего",
+        readonly=True,
+        tracking=True,
+        help="Причина возврата плана на доработку (заполняется при отклонении).",
+    )
 
     # Информация о студенте
     student_name = fields.Char("ФИО студента (полное)", required=False, tracking=True)
@@ -443,26 +449,20 @@ class IndividualPlan(models.Model):
         )
 
     def action_reject(self):
-        """Reject plan as teacher.
-
-        Changes plan state to 'rejected', records the rejecting teacher,
-        and sends a notification with rejection comments to the student.
-
-        Access: Teacher only
-        """
-        self.write({"state": "rejected", "teacher_id": self.env.user.id})
-        # Отправка уведомления студенту
-        comment = self.teacher_comment or "Без комментариев"
-        self.message_post(
-            body=f"План отклонен преподавателем {self.env.user.name}.<br/>Комментарий: {comment}",
-            subject="План отклонен",
-            message_type="notification",
-            partner_ids=[self.student_id.partner_id.id],
-        )
+        """Открыть мастер возврата плана с обязательным комментарием проверяющего."""
+        self.ensure_one()
+        return {
+            "type": "ir.actions.act_window",
+            "name": "Возврат плана на доработку",
+            "res_model": "ic.urfu.reject.wizard",
+            "view_mode": "form",
+            "target": "new",
+            "context": {"default_plan_id": self.id},
+        }
 
     def action_draft(self):
         """Вернуть в черновик"""
-        self.write({"state": "draft", "teacher_comment": False})
+        self.write({"state": "draft", "teacher_comment": False, "rejection_comment": False})
 
     def unlink(self):
         """Override unlink to restrict deletion based on state.
