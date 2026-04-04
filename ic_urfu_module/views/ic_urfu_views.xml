@@ -300,6 +300,10 @@
                         <group string="Образовательная программа" icon="fa-graduation-cap">
                             <field name="specialty_code" placeholder="02.04.01" readonly="state not in ['draft', 'rejected']"/>
                             <field name="program" placeholder="Современные проблемы компьютерных наук" readonly="state not in ['draft', 'rejected']"/>
+                            <field name="program_template_id" invisible="state != 'draft'"
+                                   options="{'no_create': True, 'no_create_edit': True}"/>
+                            <button name="action_apply_template" string="Применить шаблон" type="object"
+                                    class="btn-secondary" invisible="state != 'draft'"/>
                         </group>
                     </group>
 

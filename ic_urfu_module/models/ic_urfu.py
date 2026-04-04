@@ -236,7 +236,7 @@ class IndividualPlan(models.Model):
     teacher_comment = fields.Text("Комментарий преподавателя", tracking=True)
 
     # Информация о студенте
-    student_name = fields.Char("ФИО студента (полное)", required=True, tracking=True)
+    student_name = fields.Char("ФИО студента (полное)", required=False, tracking=True)
     student_short_name = fields.Char("ФИО студента (короткое)", compute="_compute_short_name", store=True)
 
     # Информация об обучении
@@ -257,6 +257,12 @@ class IndividualPlan(models.Model):
 
     # Семестры
     semester_ids = fields.One2many("ic.urfu.semester", "plan_id", string="Семестры")
+
+    program_template_id = fields.Many2one(
+        "ic.urfu.program.template",
+        string="Шаблон программы",
+        tracking=True,
+    )
 
     # Генерация документа
     document_file = fields.Binary("Сгенерированный документ", attachment=True)
@@ -295,6 +301,66 @@ class IndividualPlan(models.Model):
                     record.student_short_name = record.student_name
             else:
                 record.student_short_name = ""
+
+    @api.onchange("program_template_id")
+    def _onchange_program_template(self):
+        if self.program_template_id and not self.semester_ids:
+            return {
+                "warning": {
+                    "title": "Шаблон выбран",
+                    "message": 'Нажмите "Применить шаблон" чтобы предзаполнить обязательные дисциплины.',
+                }
+            }
+        return None
+
+    def action_apply_template(self):
+        """Подставить обязательные дисциплины из шаблона программы в семестры плана."""
+        self.ensure_one()
+        if not self.program_template_id:
+            raise UserError("Выберите шаблон программы перед применением.")
+
+        default_year = "2025 / 2026"
+        if self.semester_ids:
+            default_year = self.semester_ids[0].academic_year or default_year
+
+        for sem_tmpl in self.program_template_id.semester_template_ids.sorted("semester_number"):
+            sn = sem_tmpl.semester_number
+            existing = self.semester_ids.filtered(lambda s, n=sn: s.number == n)
+            if existing:
+                sem = existing[0]
+                new_subjects = sem_tmpl.subject_ids - sem.mandatory_subject_ids
+                if new_subjects:
+                    sem.write({"mandatory_subject_ids": [(4, sid) for sid in new_subjects.ids]})
+            else:
+                self.env["ic.urfu.semester"].create(
+                    {
+                        "plan_id": self.id,
+                        "number": sem_tmpl.semester_number,
+                        "academic_year": default_year,
+                        "mandatory_subject_ids": [(6, 0, sem_tmpl.subject_ids.ids)],
+                    }
+                )
+
+        # Один ответ = одна транзакция без цепочки next (иначе гонка с bus/WebSocket → SerializationFailure).
+        self.env.flush_all()
+        ctx = dict(self.env.context)
+        ctx["form_view_initial_mode"] = "edit"
+        tmpl_name = self.program_template_id.name
+        return {
+            "type": "ir.actions.act_window",
+            "name": self.display_name,
+            "res_model": self._name,
+            "res_id": self.id,
+            "view_mode": "form",
+            "target": "current",
+            "context": ctx,
+            # Обратная связь без display_notification+next (тост + второе действие ломали WS/commit).
+            "effect": {
+                "type": "rainbow_man",
+                "message": f"Шаблон «{tmpl_name}» применён.",
+                "fadeout": "fast",
+            },
+        }
 
     def action_submit(self):
         """Submit plan for teacher review.
@@ -434,9 +500,6 @@ class IndividualPlan(models.Model):
             if not semester.mandatory_subject_ids and not semester.elective_subject_ids
         )
 
-        if not self.student_name or not self.student_name.strip():
-            errors.append("- ФИО студента не может быть пустым")
-
         if not self.rop_name or not self.rop_name.strip():
             errors.append("- РОП не может быть пустым")
 
@@ -479,7 +542,8 @@ class IndividualPlan(models.Model):
                 tmp_path.unlink()
 
         # Сохранение в запись
-        filename = f"Individual_Plan_{self.student_short_name.replace(' ', '_')}.docx"
+        short_safe = (self.student_short_name or "").strip().replace(" ", "_")
+        filename = f"Individual_Plan_{short_safe}.docx" if short_safe else f"Individual_Plan_{self.id}.docx"
         self.write(
             {
                 "document_file": base64.b64encode(document_data),
@@ -536,8 +600,8 @@ class IndividualPlan(models.Model):
             )
 
         return {
-            "student_name": self.student_name,
-            "student_short_name": self.student_short_name,
+            "student_name": "",
+            "student_short_name": "",
             "rop_name": self.rop_name,
             "year": self.year,
             "institute": self.institute,
@@ -550,3 +614,57 @@ class IndividualPlan(models.Model):
             "deadline": self.deadline,
             "semesters": semesters_data,
         }
+
+
+class ProgramTemplate(models.Model):
+    """Шаблон образовательной программы (направление + набор обязательных дисциплин по семестрам)."""
+
+    _name = "ic.urfu.program.template"
+    _description = "Шаблон образовательной программы"
+    _order = "code, name"
+
+    name = fields.Char("Название программы", required=True)
+    code = fields.Char("Код направления")
+    semester_template_ids = fields.One2many(
+        "ic.urfu.semester.template",
+        "program_id",
+        string="Семестры шаблона",
+    )
+
+
+class SemesterTemplate(models.Model):
+    """Строка шаблона: номер семестра и обязательные дисциплины."""
+
+    _name = "ic.urfu.semester.template"
+    _description = "Шаблон семестра для программы"
+    _order = "semester_number"
+
+    program_id = fields.Many2one(
+        "ic.urfu.program.template",
+        string="Программа",
+        required=True,
+        ondelete="cascade",
+    )
+    semester_number = fields.Integer("Номер семестра", required=True)
+    subject_ids = fields.Many2many(
+        "ic.urfu.subject",
+        "semester_template_subject_rel",
+        "semester_template_id",
+        "subject_id",
+        string="Обязательные дисциплины шаблона",
+        domain=[("subject_type", "=", "mandatory")],
+    )
+
+    @api.constrains("semester_number")
+    def _check_semester_number_template(self):
+        for rec in self:
+            if rec.semester_number < 1 or rec.semester_number > 8:
+                raise ValidationError("Номер семестра в шаблоне должен быть от 1 до 8!")
+
+    _sql_constraints: ClassVar[list[tuple[str, str, str]]] = [
+        (
+            "program_template_semester_uniq",
+            "unique(program_id, semester_number)",
+            "В шаблоне программы уже задан этот номер семестра!",
+        )
+    ]
