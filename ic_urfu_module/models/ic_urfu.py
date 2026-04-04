@@ -142,6 +142,20 @@ class Semester(models.Model):
         domain=[("subject_type", "=", "elective")],
     )
 
+    zet_total = fields.Float(
+        string="Итого ЗЕТ",
+        compute="_compute_zet_total",
+        store=True,
+        help="Сумма ЗЕТ (поле «Объем (зет)» дисциплин) по обязательным и выборным дисциплинам семестра",
+    )
+
+    @api.depends("mandatory_subject_ids.credits", "elective_subject_ids.credits")
+    def _compute_zet_total(self):
+        for sem in self:
+            zet = sum(sem.mandatory_subject_ids.mapped("credits"))
+            zet += sum(sem.elective_subject_ids.mapped("credits"))
+            sem.zet_total = float(zet)
+
     @api.constrains("number")
     def _check_semester_number(self):
         """Validate semester number is within valid range.
@@ -264,6 +278,12 @@ class IndividualPlan(models.Model):
     # Семестры
     semester_ids = fields.One2many("ic.urfu.semester", "plan_id", string="Семестры")
 
+    total_zet = fields.Float(
+        string="Всего ЗЕТ по плану",
+        compute="_compute_total_zet",
+        store=True,
+    )
+
     program_template_id = fields.Many2one(
         "ic.urfu.program.template",
         string="Шаблон программы",
@@ -273,6 +293,11 @@ class IndividualPlan(models.Model):
     # Генерация документа
     document_file = fields.Binary("Сгенерированный документ", attachment=True)
     document_filename = fields.Char("Имя файла")
+
+    @api.depends("semester_ids.zet_total")
+    def _compute_total_zet(self):
+        for plan in self:
+            plan.total_zet = sum(plan.semester_ids.mapped("zet_total"))
 
     @api.depends("student_name", "program")
     def _compute_name(self):
@@ -318,6 +343,83 @@ class IndividualPlan(models.Model):
                 }
             }
         return None
+
+    def _program_template_defines_zet_limits(self, tmpl):
+        if not tmpl:
+            return False
+        if (tmpl.min_total_zet or 0) > 0:
+            return True
+        return any((st.min_zet or 0) > 0 for st in tmpl.semester_template_ids)
+
+    def _zet_semester_line_errors(
+        self, sem, tmpl, use_template_zet: bool, min_zet_global: int, max_zet_global: int
+    ) -> list[str]:
+        """Ошибки по одной строке семестра (минимум ЗЕТ)."""
+        errors: list[str] = []
+        sn = sem.number
+        zet_val = sem.zet_total
+        if use_template_zet:
+            sem_tmpl = tmpl.semester_template_ids.filtered(lambda t, n=sn: t.semester_number == n)[:1]
+            min_need = sem_tmpl.min_zet if sem_tmpl else 0
+            if (min_need or 0) > 0 and zet_val < min_need:
+                errors.append(
+                    f"Семестр {sn}: {zet_val:g} ЗЕТ; по учебному плану программы «{tmpl.name}» "
+                    f"требуется не менее {min_need} ЗЕТ."
+                )
+        elif zet_val < min_zet_global or zet_val > max_zet_global:
+            errors.append(f"Семестр {sn}: {zet_val:g} ЗЕТ (допустимо {min_zet_global}–{max_zet_global})")
+        return errors
+
+    def _validate_zet_constraints(self):
+        """Проверка лимитов ЗЕТ и ауд. нагрузки. Ошибки — ValidationError; предупреждения — список строк.
+
+        Если у выбранного шаблона программы заданы «Мин. ЗЕТ за программу» и/или минимумы по семестрам —
+        используются они (не глобальные пороги за семестр). Иначе — настройки из ir.config_parameter.
+        """
+        self.ensure_one()
+        icp = self.env["ir.config_parameter"].sudo()
+        max_weekly = int(icp.get_param("ic_urfu.max_hours_per_week", 36))
+        min_zet_global = int(icp.get_param("ic_urfu.min_semester_zet", 25))
+        max_zet_global = int(icp.get_param("ic_urfu.max_semester_zet", 35))
+        total_norm_global = int(icp.get_param("ic_urfu.total_plan_zet", 240))
+
+        errors = []
+        warnings = []
+
+        tmpl = self.program_template_id
+        use_template_zet = self._program_template_defines_zet_limits(tmpl)
+
+        for sem in self.semester_ids:
+            sn = sem.number
+            subjects = sem.mandatory_subject_ids | sem.elective_subject_ids
+            total_hours = sum(subjects.mapped("hours"))
+            weekly = total_hours / 18.0  # 18 недель в семестре
+            if weekly > max_weekly:
+                warnings.append(f"Семестр {sn}: ~{weekly:.1f} ч/нед (рекомендуется не более {max_weekly})")
+            errors.extend(self._zet_semester_line_errors(sem, tmpl, use_template_zet, min_zet_global, max_zet_global))
+
+        plan_total = self.total_zet
+
+        if use_template_zet:
+            if (tmpl.min_total_zet or 0) > 0 and plan_total < tmpl.min_total_zet:
+                errors.append(
+                    f"Всего по плану {plan_total:g} ЗЕТ; для программы «{tmpl.name}» "
+                    f"нужно набрать не менее {tmpl.min_total_zet} ЗЕТ."
+                )
+            for st in tmpl.semester_template_ids:
+                if (st.min_zet or 0) <= 0:
+                    continue
+                sn_req = st.semester_number
+                if not self.semester_ids.filtered(lambda s, n=sn_req: s.number == n):
+                    errors.append(
+                        f"В плане нет семестра {sn_req}; по программе для него задано минимум {st.min_zet} ЗЕТ."
+                    )
+        elif abs(plan_total - float(total_norm_global)) > 5:
+            warnings.append(f"Итого по плану: {plan_total:g} ЗЕТ (норма {total_norm_global} ЗЕТ)")
+
+        if errors:
+            raise ValidationError("Обнаружены ошибки нагрузки:\n" + "\n".join(f"• {e}" for e in errors))
+        return warnings
 
     def action_apply_template(self):
         """Подставить обязательные дисциплины из шаблона программы в семестры плана."""
@@ -412,6 +514,8 @@ class IndividualPlan(models.Model):
                 },
             }
 
+        warnings = self._validate_zet_constraints()
+
         self.write({"state": "submitted"})
         # Отправка уведомления преподавателю
         self.message_post(
@@ -420,14 +524,20 @@ class IndividualPlan(models.Model):
             message_type="notification",
         )
 
+        msg = "План отправлен на проверку"
+        notif_type = "success"
+        if warnings:
+            msg += ".\n\nПредупреждение о нагрузке:\n" + "\n".join(warnings)
+            notif_type = "warning"
+
         return {
             "type": "ir.actions.client",
             "tag": "display_notification",
             "params": {
-                "title": "Успешно",
-                "message": "План отправлен на проверку",
-                "type": "success",
-                "sticky": False,
+                "title": "Успешно" if not warnings else "Предупреждение о нагрузке",
+                "message": msg,
+                "type": notif_type,
+                "sticky": bool(warnings),
             },
         }
 
@@ -625,6 +735,12 @@ class ProgramTemplate(models.Model):
 
     name = fields.Char("Название программы", required=True)
     code = fields.Char("Код направления")
+    min_total_zet = fields.Integer(
+        string="Мин. ЗЕТ за программу (всего)",
+        default=0,
+        help="Сумма ЗЕТ по всем семестрам плана не должна быть меньше этого значения. "
+        "0 — не задавать минимум по программе (только по семестрам или глобальные лимиты).",
+    )
     semester_template_ids = fields.One2many(
         "ic.urfu.semester.template",
         "program_id",
@@ -646,6 +762,12 @@ class SemesterTemplate(models.Model):
         ondelete="cascade",
     )
     semester_number = fields.Integer("Номер семестра", required=True)
+    min_zet = fields.Integer(
+        string="Мин. ЗЕТ в семестре",
+        default=0,
+        help="Минимум суммы ЗЕТ по дисциплинам этого семестра в индивидуальном плане. "
+        "0 — не требовать отдельный минимум для этого семестра.",
+    )
     subject_ids = fields.Many2many(
         "ic.urfu.subject",
         "semester_template_subject_rel",
