@@ -157,6 +157,31 @@
                                     <field name="max_hours_per_week" class="o_light_label"/>
                                 </div>
                             </div>
+                            <div class="col-12 col-lg-6 o_setting_box">
+                                <div class="o_setting_left_pane">
+                                    <field name="enforce_hours_zet"/>
+                                </div>
+                                <div class="o_setting_right_pane">
+                                    <label for="enforce_hours_zet"/>
+                                    <div class="text-muted">Сравнение полей «часы» и «ЗЭТ» у дисциплин с нормой ниже</div>
+                                </div>
+                            </div>
+                            <div class="col-12 col-lg-6 o_setting_box">
+                                <div class="o_setting_left_pane"/>
+                                <div class="o_setting_right_pane">
+                                    <label for="hours_per_zet"/>
+                                    <div class="text-muted">Например 36 (часто в нормативных таблицах) или 12 под демо-словарь</div>
+                                    <field name="hours_per_zet" class="o_light_label"/>
+                                </div>
+                            </div>
+                            <div class="col-12 col-lg-6 o_setting_box">
+                                <div class="o_setting_left_pane"/>
+                                <div class="o_setting_right_pane">
+                                    <label for="zet_hours_tolerance"/>
+                                    <div class="text-muted">Сколько ЗЭТ можно «сдвинуть» от расчёта по часам</div>
+                                    <field name="zet_hours_tolerance" class="o_light_label"/>
+                                </div>
+                            </div>
                         </div>
                     </div>
                 </sheet>

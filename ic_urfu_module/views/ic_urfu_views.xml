@@ -36,6 +36,9 @@
                         <group>
                             <field name="subject_type" widget="radio"/>
                             <field name="control"/>
+                            <field name="is_modular"/>
+                            <field name="next_module_id" invisible="not is_modular"
+                                   options="{'no_create': True}"/>
                         </group>
                         <group>
                             <label for="hours"/>
@@ -48,6 +51,7 @@
                                 <field name="credits"/>
                                 <span>ЗЕТ</span>
                             </div>
+                            <field name="zet_from_hours" readonly="1"/>
                         </group>
                     </group>
                 </sheet>
@@ -306,6 +310,8 @@
                                    options="{'no_create': True, 'no_create_edit': True}"/>
                             <button name="action_apply_template" string="Применить шаблон" type="object"
                                     class="btn-secondary" invisible="state != 'draft'"/>
+                            <button name="action_suggest_next_modules" string="Продолжения модулей" type="object"
+                                    class="btn-secondary" icon="fa-magic" invisible="state != 'draft'"/>
                         </group>
                     </group>
 

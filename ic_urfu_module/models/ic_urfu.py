@@ -26,6 +26,21 @@ except ImportError:
     create_urfu_plan = None
 
 
+def _expected_zet_from_hours(hours: int, hours_per_zet: int) -> int:
+    """Ожидаемое целое ЗЕТ по объёму аудиторных часов и норме «часов на 1 ЗЕТ»."""
+    if hours_per_zet <= 0 or hours <= 0:
+        return 0
+    raw = int(round(hours / float(hours_per_zet)))
+    return max(constants.MIN_CREDITS, min(constants.MAX_CREDITS, raw))
+
+
+def _config_param_truthy(env, key: str, default: bool = True) -> bool:
+    raw = env["ir.config_parameter"].sudo().get_param(key)
+    if raw is None or raw == "":
+        return default
+    return str(raw).lower() in ("1", "true", "yes", "on")
+
+
 class Subject(models.Model):
     """Course/Discipline model.
 
@@ -80,6 +95,30 @@ class Subject(models.Model):
         default="mandatory",
     )
 
+    is_modular = fields.Boolean(
+        string="Модульный спецкурс",
+        default=False,
+        help="Цепочка частей курса: следующая часть подставляется в следующий семестр командой на плане.",
+    )
+    next_module_id = fields.Many2one(
+        "ic.urfu.subject",
+        string="Следующая часть модуля",
+        ondelete="set null",
+        domain="[('subject_type', '=', 'elective'), ('id', '!=', id)]",
+    )
+    zet_from_hours = fields.Integer(
+        string="ЗЕТ по норме часов",
+        compute="_compute_zet_from_hours",
+        help="Округление ауд. часов к норме из настроек (часов на 1 ЗЭТ).",
+    )
+
+    @api.depends("hours")
+    def _compute_zet_from_hours(self):
+        icp = self.env["ir.config_parameter"].sudo()
+        hpp = int(icp.get_param("ic_urfu.hours_per_zet", constants.DEFAULT_HOURS_PER_ZET))
+        for rec in self:
+            rec.zet_from_hours = _expected_zet_from_hours(rec.hours, hpp)
+
     @api.constrains("hours", "credits")
     def _check_positive_values(self):
         """Validate that hours and credits are positive.
@@ -98,6 +137,21 @@ class Subject(models.Model):
     _sql_constraints: ClassVar[list[tuple[str, str, str]]] = [
         ("name_unique", "unique(name)", "Дисциплина с таким названием уже существует!")
     ]
+
+    @api.constrains("is_modular", "next_module_id", "subject_type")
+    def _check_modular_chain(self):
+        for rec in self:
+            if rec.next_module_id:
+                if not rec.is_modular:
+                    raise ValidationError(
+                        "Укажите флаг «Модульный спецкурс», если задана следующая часть модуля."
+                    )
+                if rec.next_module_id.id == rec.id:
+                    raise ValidationError("Дисциплина не может ссылаться на себя как на следующую часть модуля.")
+                if rec.next_module_id.subject_type != "elective":
+                    raise ValidationError("Следующая часть модуля должна быть дисциплиной «По выбору».")
+            if rec.is_modular and rec.subject_type != "elective":
+                raise ValidationError("Модульный спецкурс может быть только дисциплиной по выбору.")
 
 
 class Semester(models.Model):
@@ -354,20 +408,68 @@ class IndividualPlan(models.Model):
     def _zet_semester_line_errors(
         self, sem, tmpl, use_template_zet: bool, min_zet_global: int, max_zet_global: int
     ) -> list[str]:
-        """Ошибки по одной строке семестра (минимум ЗЕТ)."""
+        """Проверка суммы ЗЕТ в семестре: пустые семестры, максимум, минимум (шаблон или глобальный)."""
         errors: list[str] = []
         sn = sem.number
+        line = sem.mandatory_subject_ids | sem.elective_subject_ids
+        if not line:
+            errors.append(f"Семестр {sn}: добавьте хотя бы одну дисциплину.")
+            return errors
+
         zet_val = sem.zet_total
-        if use_template_zet:
+
+        if zet_val > max_zet_global:
+            errors.append(
+                f"Семестр {sn}: {zet_val:g} ЗЕТ — больше допустимого максимума {max_zet_global} ЗЕТ за семестр."
+            )
+
+        if tmpl:
             sem_tmpl = tmpl.semester_template_ids.filtered(lambda t, n=sn: t.semester_number == n)[:1]
-            min_need = sem_tmpl.min_zet if sem_tmpl else 0
-            if (min_need or 0) > 0 and zet_val < min_need:
+        else:
+            sem_tmpl = self.env["ic.urfu.semester.template"].browse()
+        min_template = int(sem_tmpl.min_zet or 0) if sem_tmpl else 0
+
+        if use_template_zet and min_template > 0:
+            min_need = min_template
+        else:
+            min_need = min_zet_global
+
+        if zet_val < min_need:
+            if use_template_zet and min_template > 0:
                 errors.append(
-                    f"Семестр {sn}: {zet_val:g} ЗЕТ; по учебному плану программы «{tmpl.name}» "
-                    f"требуется не менее {min_need} ЗЕТ."
+                    f"Семестр {sn}: {zet_val:g} ЗЕТ; по программе «{tmpl.name}» в этом семестре "
+                    f"нужно не менее {min_need} ЗЕТ."
                 )
-        elif zet_val < min_zet_global or zet_val > max_zet_global:
-            errors.append(f"Семестр {sn}: {zet_val:g} ЗЕТ (допустимо {min_zet_global}–{max_zet_global})")
+            else:
+                errors.append(
+                    f"Семестр {sn}: {zet_val:g} ЗЕТ (требуется не менее {min_need}, "
+                    f"не больше {max_zet_global})."
+                )
+        return errors
+
+    def _zet_hour_consistency_errors(self) -> list[str]:
+        """Согласованность полей ауд. часов и ЗЕТ у дисциплин с нормой из настроек."""
+        self.ensure_one()
+        if not _config_param_truthy(self.env, "ic_urfu.enforce_hours_zet", True):
+            return []
+        icp = self.env["ir.config_parameter"].sudo()
+        hpp = int(icp.get_param("ic_urfu.hours_per_zet", constants.DEFAULT_HOURS_PER_ZET))
+        tol = int(icp.get_param("ic_urfu.zet_hours_tolerance", 0))
+        if hpp <= 0:
+            return []
+
+        errors: list[str] = []
+        for sem in self.semester_ids.sorted("number"):
+            for subj in sem.mandatory_subject_ids | sem.elective_subject_ids:
+                expected = _expected_zet_from_hours(subj.hours, hpp)
+                if expected == 0:
+                    continue
+                if abs(subj.credits - expected) > tol:
+                    tol_note = f" (допуск ±{tol} ЗЕТ)" if tol else ""
+                    errors.append(
+                        f"{subj.name} (семестр {sem.number}): указано {subj.credits} ЗЕТ при {subj.hours} ч; "
+                        f"по норме {hpp} ч/ЗЕТ ожидается ~{expected}{tol_note}."
+                    )
         return errors
 
     def _validate_zet_constraints(self):
@@ -383,8 +485,10 @@ class IndividualPlan(models.Model):
         max_zet_global = int(icp.get_param("ic_urfu.max_semester_zet", 35))
         total_norm_global = int(icp.get_param("ic_urfu.total_plan_zet", 240))
 
-        errors = []
-        warnings = []
+        errors: list[str] = []
+        warnings: list[str] = []
+
+        errors.extend(self._zet_hour_consistency_errors())
 
         tmpl = self.program_template_id
         use_template_zet = self._program_template_defines_zet_limits(tmpl)
@@ -468,6 +572,50 @@ class IndividualPlan(models.Model):
                 "message": f"Шаблон «{tmpl_name}» применён.",
                 "fadeout": "fast",
             },
+        }
+
+    def action_suggest_next_modules(self):
+        """Добавить в следующий семестр дисциплины-продолжения для модульных спецкурсов."""
+        self.ensure_one()
+        if self.state != "draft":
+            raise UserError("Предложение модулей доступно только для плана в статусе «Черновик».")
+
+        suggested: list[str] = []
+        for sem in self.semester_ids.sorted("number"):
+            line = sem.mandatory_subject_ids | sem.elective_subject_ids
+            modular_subjects = line.filtered(lambda s: s.is_modular and s.next_module_id)
+            if not modular_subjects:
+                continue
+
+            next_sem_recs = self.semester_ids.filtered(lambda s, n=sem.number: s.number == n + 1)
+            if not next_sem_recs:
+                continue
+
+            next_sem = next_sem_recs[0]
+            for subj in modular_subjects:
+                next_subj = subj.next_module_id
+                if not next_subj or not next_subj.exists():
+                    continue
+                present = next_sem.mandatory_subject_ids | next_sem.elective_subject_ids
+                if next_subj in present:
+                    continue
+                next_sem.write({"elective_subject_ids": [(4, next_subj.id)]})
+                suggested.append(f"Семестр {next_sem.number}: «{next_subj.name}»")
+
+        if suggested:
+            message = "Добавлены продолжения модулей:\n" + "\n".join(f"• {s}" for s in suggested)
+            ntype = "success"
+        else:
+            message = (
+                "Нет цепочек для добавления: задайте у дисциплин «следующую часть модуля» "
+                "или части уже стоят в следующем семестре."
+            )
+            ntype = "info"
+
+        return {
+            "type": "ir.actions.client",
+            "tag": "display_notification",
+            "params": {"message": message, "type": ntype, "sticky": bool(suggested)},
         }
 
     def action_submit(self):
@@ -626,6 +774,11 @@ class IndividualPlan(models.Model):
         validation_errors = self._validate_for_generation()
         if validation_errors:
             raise UserError("Документ не может быть сгенерирован:\n" + "\n".join(validation_errors))
+
+        try:
+            self._validate_zet_constraints()
+        except ValidationError as exc:
+            raise UserError(str(exc)) from exc
 
         if create_urfu_plan is None:
             raise UserError("Модуль генерации документов не найден! Убедитесь, что python-docx установлен.")

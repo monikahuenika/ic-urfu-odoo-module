@@ -98,3 +98,22 @@ class IcUrfuConfigSettings(models.TransientModel):
         config_parameter="ic_urfu.max_hours_per_week",
         help="Рекомендуемый потолок средней недельной аудиторной нагрузки в семестре",
     )
+
+    hours_per_zet = fields.Integer(
+        string="Ауд. часов на 1 ЗЕТ",
+        default=12,
+        config_parameter="ic_urfu.hours_per_zet",
+        help="Ожидаемое ЗЭТ для дисциплины ≈ округление (аудиторные часы / это значение). "
+        "Для справочника-демо подходит 12; для проверки по методике с 36 ч/ЗЭТ укажите 36.",
+    )
+    zet_hours_tolerance = fields.Integer(
+        string="Допуск ЗЕТ (±)",
+        default=0,
+        config_parameter="ic_urfu.zet_hours_tolerance",
+        help="Допустимое отклонение указанного ЗЭТ от расчёта по часам (в зачётных единицах).",
+    )
+    enforce_hours_zet = fields.Boolean(
+        string="Проверять соответствие часов и ЗЭТ при отправке и генерации документа",
+        default=True,
+        config_parameter="ic_urfu.enforce_hours_zet",
+    )

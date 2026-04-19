@@ -3,7 +3,7 @@
 {
     "name": "IC UrFU Module",
     "summary": "Individual education plan generator for UrFU",
-    "version": "17.0.1.0.6",
+    "version": "17.0.1.0.7",
     "development_status": "Beta",
     "category": "Education",
     "website": "-",
